@@ -7,6 +7,7 @@ from flashapi.core.response import create_list_response, create_item_response
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
+from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 
 
 def register_models(
@@ -18,10 +19,11 @@ def register_models(
     formatter: Callable | None = None,
 ):
     """Register models on an existing Flask app."""
-    from flask import Blueprint, request, jsonify, abort
+    from flask import Blueprint, request, jsonify
 
     storage = AutoStorage(database)
     blueprint = Blueprint("flashapi", __name__)
+    all_schemas: list[ModelSchema] = []
 
     for model_entry in models:
         if isinstance(model_entry, Model):
@@ -32,9 +34,28 @@ def register_models(
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
         storage.ensure_table(schema)
+        all_schemas.append(schema)
         _create_flask_routes(blueprint, schema, storage, formatter)
 
+    if docs:
+        _add_docs_routes(blueprint, all_schemas)
+
     app.register_blueprint(blueprint)
+
+
+def _add_docs_routes(blueprint, schemas: list[ModelSchema]) -> None:
+    from flask import jsonify, Response
+
+    openapi_spec = generate_openapi_schema(schemas)
+
+    @blueprint.route("/openapi.json", methods=["GET"], endpoint="flashapi_openapi")
+    def openapi_json():
+        return jsonify(openapi_spec)
+
+    @blueprint.route("/docs", methods=["GET"], endpoint="flashapi_docs")
+    def docs_ui():
+        html = get_swagger_html(title="FlashAPI", openapi_url="/openapi.json")
+        return Response(html, content_type="text/html")
 
 
 def _create_flask_routes(

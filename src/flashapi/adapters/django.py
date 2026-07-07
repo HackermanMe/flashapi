@@ -7,17 +7,20 @@ from flashapi.core.response import create_list_response, create_item_response
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.inspectors import inspect_model
 from flashapi.storage.orm import DjangoORMStorage
+from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 
 
 def generate_urls(
     models: list[type | Model],
     *,
+    docs: bool = True,
     formatter: Callable | None = None,
 ):
     """Generate Django URL patterns for the given models."""
     from django.urls import path
 
     urlpatterns = []
+    all_schemas: list[ModelSchema] = []
 
     for model_entry in models:
         if isinstance(model_entry, Model):
@@ -28,10 +31,34 @@ def generate_urls(
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
         storage = DjangoORMStorage(wrapper.model_class)
+        all_schemas.append(schema)
         patterns = _create_django_views(schema, storage, formatter)
         urlpatterns.extend(patterns)
 
+    if docs:
+        urlpatterns.extend(_create_docs_views(all_schemas))
+
     return urlpatterns
+
+
+def _create_docs_views(schemas: list[ModelSchema]):
+    from django.urls import path
+    from django.http import JsonResponse, HttpResponse
+    import json
+
+    openapi_spec = generate_openapi_schema(schemas)
+
+    def openapi_json(request):
+        return JsonResponse(openapi_spec, safe=False)
+
+    def docs_ui(request):
+        html = get_swagger_html(title="FlashAPI", openapi_url="openapi.json")
+        return HttpResponse(html, content_type="text/html")
+
+    return [
+        path("openapi.json", openapi_json, name="flashapi_openapi"),
+        path("docs/", docs_ui, name="flashapi_docs"),
+    ]
 
 
 def _create_django_views(
@@ -74,12 +101,6 @@ def _create_django_views(
                 return JsonResponse(create_item_response(item, formatter), status=201)
 
             return JsonResponse({"error": "Method not allowed"}, status=405)
-
-        methods = []
-        if "list" in schema.permissions:
-            methods.append("GET")
-        if "create" in schema.permissions:
-            methods.append("POST")
 
         patterns.append(path(f"{table}/", collection_view, name=f"{table}_collection"))
 
