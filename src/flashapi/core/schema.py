@@ -21,8 +21,10 @@ class FieldType(Enum):
 
 @dataclass
 class RelationSchema:
-    type: str  # "one_to_one", "one_to_many", "many_to_many"
+    type: str  # "one_to_one", "many_to_one", "one_to_many", "many_to_many"
     target: str
+    target_plural: str = ""
+    foreign_key: str = ""
 
 
 @dataclass
