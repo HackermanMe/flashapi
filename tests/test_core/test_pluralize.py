@@ -3,6 +3,7 @@ from flashapi.core.pluralize import pluralize
 
 
 @pytest.mark.parametrize("word,expected", [
+    # English
     ("user", "users"),
     ("book", "books"),
     ("category", "categories"),
@@ -26,6 +27,26 @@ from flashapi.core.pluralize import pluralize
     ("day", "days"),
     ("key", "keys"),
     ("toy", "toys"),
+    ("class", "classes"),
+    ("match", "matches"),
+    ("dish", "dishes"),
+    # French
+    ("niveau", "niveaux"),
+    ("jeu", "jeux"),
+    ("animal", "animaux"),
+    ("journal", "journaux"),
+    ("travail", "travaux"),
+    ("emploidutemps", "emploidutemps"),
+    ("voix", "voix"),
+    ("nez", "nez"),
+    ("enseignant", "enseignants"),
+    ("eleve", "eleves"),
+    ("matiere", "matieres"),
+    ("evaluation", "evaluations"),
+    ("motif", "motifs"),
+    ("objectif", "objectifs"),
+    ("chef", "chefs"),
+    ("bulletin", "bulletins"),
 ])
 def test_pluralize(word, expected):
     assert pluralize(word) == expected

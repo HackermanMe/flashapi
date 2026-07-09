@@ -48,18 +48,22 @@ class DjangoInspector(Inspector):
                 constraints["max_length"] = f.max_length
 
             relation = None
-            if hasattr(f, "related_model") and f.related_model:
+            is_fk = hasattr(f, "related_model") and f.related_model
+            if is_fk:
                 relation = RelationSchema(
                     type="one_to_one" if f.one_to_one else "many_to_one",
                     target=f.related_model.__name__,
                 )
+                field_type = FieldType.INTEGER
 
             is_pk = getattr(f, "primary_key", False)
             required = not getattr(f, "blank", False) and not getattr(f, "null", False)
             default = f.default if hasattr(f, "default") and f.default is not None else None
 
+            field_name = getattr(f, "attname", f.name) if is_fk else f.name
+
             fields.append(FieldSchema(
-                name=f.name,
+                name=field_name,
                 type=field_type,
                 required=required and not is_pk,
                 default=default,

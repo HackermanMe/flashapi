@@ -46,13 +46,18 @@ def _create_docs_views(schemas: list[ModelSchema]):
     from django.http import JsonResponse, HttpResponse
     import json
 
-    openapi_spec = generate_openapi_schema(schemas)
+    openapi_spec = generate_openapi_schema(schemas, trailing_slash=True)
 
     def openapi_json(request):
-        return JsonResponse(openapi_spec, safe=False)
+        spec = dict(openapi_spec)
+        base_path = request.path.rsplit("openapi.json", 1)[0]
+        spec["servers"] = [{"url": base_path}]
+        return JsonResponse(spec, safe=False)
 
     def docs_ui(request):
-        html = get_swagger_html(title="FlashAPI", openapi_url="openapi.json")
+        base_path = request.path.rsplit("docs/", 1)[0]
+        openapi_url = f"{base_path}openapi.json"
+        html = get_swagger_html(title="FlashAPI", openapi_url=openapi_url)
         return HttpResponse(html, content_type="text/html")
 
     return [
@@ -68,6 +73,7 @@ def _create_django_views(
 ):
     from django.urls import path
     from django.http import JsonResponse
+    from django.views.decorators.csrf import csrf_exempt
     import json
 
     table = schema.plural
@@ -102,7 +108,7 @@ def _create_django_views(
 
             return JsonResponse({"error": "Method not allowed"}, status=405)
 
-        patterns.append(path(f"{table}/", collection_view, name=f"{table}_collection"))
+        patterns.append(path(f"{table}/", csrf_exempt(collection_view), name=f"{table}_collection"))
 
     if any(op in schema.permissions for op in ["read", "update", "delete"]):
 
@@ -129,6 +135,6 @@ def _create_django_views(
 
             return JsonResponse({"error": "Method not allowed"}, status=405)
 
-        patterns.append(path(f"{table}/<int:item_id>/", detail_view, name=f"{table}_detail"))
+        patterns.append(path(f"{table}/<int:item_id>/", csrf_exempt(detail_view), name=f"{table}_detail"))
 
     return patterns

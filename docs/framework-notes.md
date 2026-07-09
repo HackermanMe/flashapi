@@ -1,0 +1,189 @@
+# Framework-Specific Notes
+
+[Back to main README](../README.md)
+
+---
+
+## Table of Contents
+
+- [Django](#django)
+- [FastAPI](#fastapi)
+- [Flask](#flask)
+
+---
+
+## Django
+
+### Field serialization
+
+| Django Field | JSON Output | Example |
+|-------------|-------------|---------|
+| CharField, TextField | string | `"Hello"` |
+| IntegerField | integer | `42` |
+| FloatField | float | `3.14` |
+| DecimalField | float | `19.99` |
+| BooleanField | boolean | `true` |
+| DateField | ISO 8601 string | `"2024-01-15"` |
+| DateTimeField | ISO 8601 string | `"2024-01-15T10:30:00"` |
+| TimeField | ISO 8601 string | `"10:30:00"` |
+| UUIDField | string | `"550e8400-e29b-..."` |
+| JSONField | object/array | `{"key": "value"}` |
+| ImageField / FileField | string (path) or null | `"photos/pic.jpg"` or `null` |
+| ForeignKey | integer (the `_id` column) | `5` |
+| ManyToManyField | not serialized | — |
+
+### ForeignKey behavior
+
+FlashAPI uses the **database column name** for foreign keys:
+
+```python
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+```
+
+In the API, the field is `author_id` (not `author`):
+```json
+{"id": 1, "title": "...", "author_id": 5}
+```
+
+When creating/updating, send `author_id`:
+```bash
+curl -X POST /api/books/ -d '{"title": "...", "author_id": 5}'
+```
+
+### CSRF
+
+All FlashAPI views have `@csrf_exempt` applied automatically. APIs typically use token-based auth, not cookies, so CSRF protection is not needed.
+
+### Trailing slash
+
+All Django URLs have a trailing slash (e.g., `/api/products/`). This matches Django's `APPEND_SLASH=True` default. Swagger UI sends requests with trailing slashes automatically.
+
+### Migrations
+
+FlashAPI does NOT create, modify, or run migrations. Your models, your migrations. Run `python manage.py makemigrations` and `python manage.py migrate` as usual.
+
+### ImageField / FileField
+
+- If the file field has a value: serialized as the relative path (`"photos/pic.jpg"`)
+- If the file field is empty/null: serialized as `null`
+- FlashAPI does NOT handle file uploads via the CRUD API — use a custom endpoint for that
+
+### Settings requirements
+
+No special Django settings are needed. Just install `flashapi[django]` and use `generate_urls()` in your `urls.py`.
+
+---
+
+## FastAPI
+
+### Async
+
+All FlashAPI-generated routes are `async def`. They work with FastAPI's async runtime.
+
+### URL format
+
+FastAPI URLs have **no trailing slash**: `/products`, `/products/1`.
+
+### Auto-generated docs
+
+FastAPI's built-in Swagger UI (`/docs`) and ReDoc (`/redoc`) are used directly. FlashAPI configures the app title and description.
+
+### Query parameter validation
+
+FastAPI validates query parameters:
+- `page` must be >= 1
+- `page_size` must be between 1 and 100
+
+Invalid values return a 422 Validation Error (FastAPI's default behavior).
+
+### Storage
+
+For Pydantic/dataclass models, FlashAPI creates a SQLite database file:
+- Default: `flashapi.db` in the current working directory
+- Custom: `FlashAPI(models=[...], database="path/to/db.db")`
+
+The database is created automatically on first run. Tables are created for each model.
+
+### The `id` field
+
+For Pydantic/dataclass models, FlashAPI automatically adds an auto-increment `id` field. Do **not** define it in your model:
+
+```python
+# Correct
+class Product(BaseModel):
+    name: str
+    price: float
+
+# Wrong — don't add id yourself
+class Product(BaseModel):
+    id: int          # ← Don't do this
+    name: str
+    price: float
+```
+
+### Adding routes to FlashAPI's app
+
+The `.app` property returns a standard `FastAPI` instance. You can add routes, middleware, event handlers, etc.:
+
+```python
+flash = FlashAPI(models=[Product])
+app = flash.app
+
+# Standard FastAPI operations work
+@app.on_event("startup")
+async def startup():
+    print("Server starting...")
+
+@app.middleware("http")
+async def my_middleware(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Custom"] = "value"
+    return response
+
+@app.get("/custom")
+async def custom_route():
+    return {"hello": "world"}
+```
+
+---
+
+## Flask
+
+### URL format
+
+Flask URLs have **no trailing slash**: `/products`, `/products/1`.
+
+### Blueprint
+
+FlashAPI registers routes directly on your Flask app. No Blueprint is used.
+
+### Storage
+
+Same as FastAPI: SQLite for Pydantic/dataclass models.
+
+### Docs
+
+- Swagger UI: `/docs`
+- OpenAPI JSON: `/openapi.json`
+
+### Adding routes
+
+Just add routes to the same Flask app as usual:
+
+```python
+app = Flask(__name__)
+register_models(app, models=[Product, Order])
+
+@app.route("/my-custom-route")
+def custom():
+    return jsonify({"hello": "world"})
+```
+
+---
+
+## Related Docs
+
+- [Integration Guide](integration.md)
+- [Features](features.md)
+- [Customization](customization.md)

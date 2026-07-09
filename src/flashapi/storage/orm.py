@@ -45,11 +45,44 @@ class DjangoORMStorage(Storage):
             return False
 
     def _to_dict(self, instance) -> dict[str, Any]:
+        from datetime import date, datetime, time
+        from decimal import Decimal
+        import uuid
+
         data = {}
         for field in instance._meta.get_fields():
             if field.many_to_many or field.one_to_many:
                 continue
-            name = field.name
+            if hasattr(field, "related_model") and field.related_model:
+                name = field.attname
+            else:
+                name = field.name
             value = getattr(instance, name, None)
-            data[name] = value
+            data[name] = self._serialize_value(value)
         return data
+
+    def _serialize_value(self, value) -> Any:
+        from datetime import date, datetime, time
+        from decimal import Decimal
+        import uuid
+
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, time):
+            return value.isoformat()
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        if hasattr(value, "field") and hasattr(value, "name"):
+            try:
+                return value.name or None
+            except (ValueError, AttributeError):
+                return None
+        return str(value)

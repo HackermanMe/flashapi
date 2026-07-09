@@ -49,6 +49,7 @@ def generate_openapi_schema(
     title: str = "FlashAPI",
     version: str = "0.1.0",
     description: str = "Define your models. FlashAPI does the rest.",
+    trailing_slash: bool = False,
 ) -> dict[str, Any]:
     """Generate a full OpenAPI 3.1.0 schema from model schemas."""
     paths = {}
@@ -57,7 +58,7 @@ def generate_openapi_schema(
     for schema in schemas:
         model_schema_def = _build_model_schema(schema)
         components_schemas[schema.name] = model_schema_def
-        model_paths = _build_paths(schema)
+        model_paths = _build_paths(schema, trailing_slash=trailing_slash)
         paths.update(model_paths)
 
     return {
@@ -98,10 +99,11 @@ def _build_model_schema(schema: ModelSchema) -> dict:
     return result
 
 
-def _build_paths(schema: ModelSchema) -> dict:
+def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     paths = {}
     table = schema.plural
     tag = schema.name
+    suffix = "/" if trailing_slash else ""
 
     collection_ops = {}
     detail_ops = {}
@@ -208,9 +210,9 @@ def _build_paths(schema: ModelSchema) -> dict:
         }
 
     if collection_ops:
-        paths[f"/{table}"] = collection_ops
+        paths[f"/{table}{suffix}"] = collection_ops
     if detail_ops:
-        paths[f"/{table}/{{item_id}}"] = detail_ops
+        paths[f"/{table}/{{item_id}}{suffix}"] = detail_ops
 
     return paths
 
