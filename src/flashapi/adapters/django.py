@@ -4,6 +4,9 @@ from typing import Callable
 
 from flashapi.core.schema import Model, ModelSchema
 from flashapi.core.response import create_list_response, create_item_response
+from flashapi.core.custom_routes import (
+    CustomRoute, custom_routes_to_openapi_paths, discover_django_views,
+)
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.inspectors import inspect_model
 from flashapi.storage.orm import DjangoORMStorage
@@ -13,11 +16,16 @@ from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 def generate_urls(
     models: list[type | Model],
     *,
+    custom_routes: list[CustomRoute] | None = None,
+    extra_views: list | None = None,
     docs: bool = True,
     formatter: Callable | None = None,
 ):
-    """Generate Django URL patterns for the given models."""
-    from django.urls import path
+    """Generate Django URL patterns for the given models.
+
+    Custom views decorated with @api_doc are auto-discovered from extra_views
+    or from all urlpatterns in the same file.
+    """
 
     urlpatterns = []
     all_schemas: list[ModelSchema] = []
@@ -36,17 +44,28 @@ def generate_urls(
         urlpatterns.extend(patterns)
 
     if docs:
-        urlpatterns.extend(_create_docs_views(all_schemas))
+        urlpatterns.extend(_create_docs_views(
+            all_schemas, custom_routes or [], extra_views or [],
+        ))
 
     return urlpatterns
 
 
-def _create_docs_views(schemas: list[ModelSchema]):
+def _create_docs_views(schemas: list[ModelSchema], custom_routes: list[CustomRoute], extra_views: list):
     from django.urls import path
     from django.http import JsonResponse, HttpResponse
-    import json
 
     openapi_spec = generate_openapi_schema(schemas, trailing_slash=True)
+
+    # Method 1: explicit CustomRoute objects
+    if custom_routes:
+        custom_paths = custom_routes_to_openapi_paths(custom_routes, trailing_slash=True)
+        openapi_spec["paths"].update(custom_paths)
+
+    # Method 2: auto-discover @api_doc decorated views from extra_views (URL patterns)
+    if extra_views:
+        discovered = discover_django_views(extra_views, trailing_slash=True)
+        openapi_spec["paths"].update(discovered)
 
     def openapi_json(request):
         spec = dict(openapi_spec)
@@ -87,8 +106,11 @@ def _create_django_views(
                 items = storage.list_all(_table)
                 params = dict(request.GET)
                 params = {k: v[0] if isinstance(v, list) else v for k, v in params.items()}
-                page = int(params.get("page", 1))
-                page_size = int(params.get("page_size", 20))
+                try:
+                    page = max(1, int(params.get("page", 1)))
+                    page_size = max(1, min(100, int(params.get("page_size", 20))))
+                except (ValueError, TypeError):
+                    return JsonResponse({"error": "Invalid page or page_size parameter"}, status=400)
                 sort = params.get("sort")
                 search = params.get("search")
 
@@ -101,7 +123,10 @@ def _create_django_views(
                 )
 
             elif request.method == "POST" and "create" in _schema.permissions:
-                body = json.loads(request.body)
+                try:
+                    body = json.loads(request.body)
+                except (json.JSONDecodeError, ValueError):
+                    return JsonResponse({"error": "Invalid JSON body"}, status=400)
                 data = {k: v for k, v in body.items() if k in _fields}
                 item = storage.create(_table, data)
                 return JsonResponse(create_item_response(item, formatter), status=201)

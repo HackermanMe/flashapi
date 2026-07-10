@@ -1,13 +1,47 @@
 from typing import Any, Callable, Optional
+from datetime import date, datetime, time
+import uuid
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, create_model
 
-from flashapi.core.schema import Model, ModelSchema
+from flashapi.core.schema import Model, ModelSchema, FieldType
 from flashapi.core.response import create_list_response, create_item_response
 from flashapi.core.relations import resolve_relations, find_expandable_fields
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
+from flashapi.storage.sqlalchemy import SQLAlchemyStorage
+
+
+FIELD_TYPE_TO_PYTHON = {
+    FieldType.STRING: str,
+    FieldType.TEXT: str,
+    FieldType.INTEGER: int,
+    FieldType.FLOAT: float,
+    FieldType.BOOLEAN: bool,
+    FieldType.DATE: date,
+    FieldType.DATETIME: datetime,
+    FieldType.TIME: time,
+    FieldType.UUID: uuid.UUID,
+    FieldType.JSON: dict,
+    FieldType.BINARY: bytes,
+}
+
+
+def _build_pydantic_model(schema: ModelSchema, *, all_optional: bool = False) -> type[BaseModel]:
+    """Create a Pydantic model from a ModelSchema for request body validation."""
+    fields = {}
+    for f in schema.fields:
+        if f.primary_key and f.auto_generated:
+            continue
+        python_type = FIELD_TYPE_TO_PYTHON.get(f.type, str)
+        if f.required and not all_optional:
+            fields[f.name] = (python_type, ...)
+        else:
+            fields[f.name] = (Optional[python_type], None)
+    suffix = "Update" if all_optional else "Create"
+    return create_model(f"{schema.name}{suffix}", **fields)
 
 
 class FlashAPI:
@@ -17,6 +51,7 @@ class FlashAPI:
         self,
         models: list,
         *,
+        engine=None,
         database: str = "flashapi.db",
         docs: bool = True,
         formatter: Optional[Callable] = None,
@@ -27,10 +62,15 @@ class FlashAPI:
             docs_url="/docs" if docs else None,
             redoc_url="/redoc" if docs else None,
         )
-        self._storage = AutoStorage(database)
+        self._engine = engine
+        self._session_factory = None
+        if engine is not None:
+            from sqlalchemy.orm import sessionmaker
+            self._session_factory = sessionmaker(bind=engine)
+        self._auto_storage = AutoStorage(database) if engine is None else None
         self._formatter = formatter
         self._schemas: list[ModelSchema] = []
-        self._wrappers: list = []
+        self._storages: dict[str, Any] = {}
 
         for model_entry in models:
             self._prepare_model(model_entry)
@@ -50,12 +90,20 @@ class FlashAPI:
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
-        self._storage.ensure_table(schema)
+
+        is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
+
+        if is_sa and self._session_factory is not None:
+            storage = SQLAlchemyStorage(self._session_factory, wrapper.model_class)
+        else:
+            self._auto_storage.ensure_table(schema)
+            storage = self._auto_storage
+
+        self._storages[schema.plural] = storage
         self._schemas.append(schema)
 
     def _register_relations(self) -> None:
         parent_to_children = resolve_relations(self._schemas)
-        storage = self._storage
         formatter = self._formatter
 
         for parent_plural, relations in parent_to_children.items():
@@ -64,7 +112,8 @@ class FlashAPI:
                     parent_plural=parent_plural,
                     child_plural=relation.target_plural,
                     foreign_key=relation.foreign_key,
-                    storage=storage,
+                    parent_storage=self._storages.get(parent_plural),
+                    child_storage=self._storages.get(relation.target_plural),
                     formatter=formatter,
                 )
 
@@ -72,8 +121,10 @@ class FlashAPI:
         table = schema.plural
         field_names = {f.name for f in schema.fields if not f.primary_key}
         formatter = self._formatter
-        storage = self._storage
+        storage = self._storages[table]
         expandable = find_expandable_fields(schema)
+        create_model_cls = _build_pydantic_model(schema)
+        update_model_cls = _build_pydantic_model(schema, all_optional=True)
 
         if "list" in schema.permissions:
             self._add_list_route(table, field_names, formatter, storage, schema.name, expandable)
@@ -82,10 +133,10 @@ class FlashAPI:
             self._add_read_route(table, formatter, storage, schema.name, expandable)
 
         if "create" in schema.permissions:
-            self._add_create_route(table, field_names, formatter, storage, schema.name)
+            self._add_create_route(table, field_names, formatter, storage, schema.name, create_model_cls)
 
         if "update" in schema.permissions:
-            self._add_update_route(table, field_names, formatter, storage, schema.name)
+            self._add_update_route(table, field_names, formatter, storage, schema.name, update_model_cls)
 
         if "delete" in schema.permissions:
             self._add_delete_route(table, storage, schema.name)
@@ -108,7 +159,7 @@ class FlashAPI:
             page_items, total = paginate(items, page, page_size)
 
             if expand:
-                page_items = self._expand_items(page_items, expand, expandable, storage)
+                page_items = self._expand_items(page_items, expand, expandable)
 
             return create_list_response(page_items, total, page, page_size, formatter)
 
@@ -120,23 +171,21 @@ class FlashAPI:
                 raise HTTPException(status_code=404, detail="Not found")
 
             if expand:
-                item = self._expand_items([item], expand, expandable, storage)[0]
+                item = self._expand_items([item], expand, expandable)[0]
 
             return create_item_response(item, formatter)
 
-    def _add_create_route(self, table, field_names, formatter, storage, tag):
+    def _add_create_route(self, table, field_names, formatter, storage, tag, body_model):
         @self._app.post(f"/{table}", status_code=201, tags=[tag], name=f"{table}_create")
-        async def route(request: Request):
-            body = await request.json()
-            data = {k: v for k, v in body.items() if k in field_names}
+        async def route(body: body_model):
+            data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in field_names}
             item = storage.create(table, data)
             return create_item_response(item, formatter)
 
-    def _add_update_route(self, table, field_names, formatter, storage, tag):
+    def _add_update_route(self, table, field_names, formatter, storage, tag, body_model):
         @self._app.put(f"/{table}/{{item_id}}", tags=[tag], name=f"{table}_update")
-        async def route(item_id: int, request: Request):
-            body = await request.json()
-            data = {k: v for k, v in body.items() if k in field_names}
+        async def route(item_id: int, body: body_model):
+            data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in field_names}
             item = storage.update(table, item_id, data)
             if item is None:
                 raise HTTPException(status_code=404, detail="Not found")
@@ -149,7 +198,7 @@ class FlashAPI:
             if not deleted:
                 raise HTTPException(status_code=404, detail="Not found")
 
-    def _add_nested_list_route(self, parent_plural, child_plural, foreign_key, storage, formatter):
+    def _add_nested_list_route(self, parent_plural, child_plural, foreign_key, parent_storage, child_storage, formatter):
         @self._app.get(
             f"/{parent_plural}/{{parent_id}}/{child_plural}",
             tags=[parent_plural.title()],
@@ -162,11 +211,11 @@ class FlashAPI:
             sort: Optional[str] = None,
             search: Optional[str] = None,
         ):
-            parent = storage.get(parent_plural, parent_id)
+            parent = parent_storage.get(parent_plural, parent_id)
             if parent is None:
                 raise HTTPException(status_code=404, detail="Parent not found")
 
-            all_items = storage.list_all(child_plural)
+            all_items = child_storage.list_all(child_plural)
             items = [i for i in all_items if i.get(foreign_key) == parent_id]
 
             child_fields = {k for item in items for k in item.keys() if k != "id"}
@@ -178,7 +227,7 @@ class FlashAPI:
             page_items, total = paginate(items, page, page_size)
             return create_list_response(page_items, total, page, page_size, formatter)
 
-    def _expand_items(self, items, expand_param, expandable, storage):
+    def _expand_items(self, items, expand_param, expandable):
         expand_fields = [f.strip() for f in expand_param.split(",")]
         expanded_items = []
 
@@ -186,15 +235,54 @@ class FlashAPI:
             item_copy = dict(item)
             for field_name in expand_fields:
                 if field_name in expandable:
+                    target_plural = expandable[field_name]
+                    target_storage = self._storages.get(target_plural)
+                    if target_storage is None:
+                        continue
                     fk_field = f"{field_name}_id"
                     fk_value = item_copy.get(fk_field)
                     if fk_value is not None:
-                        related = storage.get(expandable[field_name], fk_value)
+                        related = target_storage.get(target_plural, fk_value)
                         if related:
                             item_copy[field_name] = related
             expanded_items.append(item_copy)
 
         return expanded_items
+
+    def get(self, path: str, *, tag: str = "Custom", summary: str = "", **kwargs):
+        """Register a custom GET route — appears in Swagger docs."""
+        def decorator(func):
+            self._app.get(path, tags=[tag], summary=summary or f"GET {path}", **kwargs)(func)
+            return func
+        return decorator
+
+    def post(self, path: str, *, tag: str = "Custom", summary: str = "", **kwargs):
+        """Register a custom POST route — appears in Swagger docs."""
+        def decorator(func):
+            self._app.post(path, tags=[tag], summary=summary or f"POST {path}", **kwargs)(func)
+            return func
+        return decorator
+
+    def put(self, path: str, *, tag: str = "Custom", summary: str = "", **kwargs):
+        """Register a custom PUT route — appears in Swagger docs."""
+        def decorator(func):
+            self._app.put(path, tags=[tag], summary=summary or f"PUT {path}", **kwargs)(func)
+            return func
+        return decorator
+
+    def delete(self, path: str, *, tag: str = "Custom", summary: str = "", **kwargs):
+        """Register a custom DELETE route — appears in Swagger docs."""
+        def decorator(func):
+            self._app.delete(path, tags=[tag], summary=summary or f"DELETE {path}", **kwargs)(func)
+            return func
+        return decorator
+
+    def patch(self, path: str, *, tag: str = "Custom", summary: str = "", **kwargs):
+        """Register a custom PATCH route — appears in Swagger docs."""
+        def decorator(func):
+            self._app.patch(path, tags=[tag], summary=summary or f"PATCH {path}", **kwargs)(func)
+            return func
+        return decorator
 
     @property
     def app(self):

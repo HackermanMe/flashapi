@@ -5,9 +5,13 @@ from typing import Callable
 from flashapi.core.schema import Model, ModelSchema
 from flashapi.core.response import create_list_response, create_item_response
 from flashapi.core.relations import resolve_relations, find_expandable_fields
+from flashapi.core.custom_routes import (
+    CustomRoute, custom_routes_to_openapi_paths, discover_flask_views,
+)
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
+from flashapi.storage.sqlalchemy import SQLAlchemyStorage
 from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 
 
@@ -15,6 +19,8 @@ def register_models(
     app,
     models: list[type | Model],
     *,
+    engine=None,
+    custom_routes: list[CustomRoute] | None = None,
     database: str = "flashapi.db",
     docs: bool = True,
     formatter: Callable | None = None,
@@ -22,9 +28,15 @@ def register_models(
     """Register models on an existing Flask app."""
     from flask import Blueprint
 
-    storage = AutoStorage(database)
+    session_factory = None
+    if engine is not None:
+        from sqlalchemy.orm import sessionmaker
+        session_factory = sessionmaker(bind=engine)
+
+    auto_storage = AutoStorage(database) if engine is None else None
     blueprint = Blueprint("flashapi", __name__)
     all_schemas: list[ModelSchema] = []
+    storages: dict[str, any] = {}
 
     for model_entry in models:
         if isinstance(model_entry, Model):
@@ -34,7 +46,16 @@ def register_models(
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
-        storage.ensure_table(schema)
+
+        is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
+
+        if is_sa and session_factory is not None:
+            storage = SQLAlchemyStorage(session_factory, wrapper.model_class)
+        else:
+            auto_storage.ensure_table(schema)
+            storage = auto_storage
+
+        storages[schema.plural] = storage
         all_schemas.append(schema)
         expandable = find_expandable_fields(schema)
         _create_flask_routes(blueprint, schema, storage, formatter, expandable)
@@ -44,22 +65,34 @@ def register_models(
         for relation in relations:
             _create_nested_route(
                 blueprint, parent_plural, relation.target_plural,
-                relation.foreign_key, storage, formatter,
+                relation.foreign_key, storages.get(relation.target_plural, storage), formatter,
             )
 
     if docs:
-        _add_docs_routes(blueprint, all_schemas)
+        _add_docs_routes(blueprint, all_schemas, custom_routes or [], flask_app=app)
 
     app.register_blueprint(blueprint)
 
 
-def _add_docs_routes(blueprint, schemas: list[ModelSchema]) -> None:
+def _add_docs_routes(blueprint, schemas: list[ModelSchema], custom_routes: list[CustomRoute], flask_app=None) -> None:
     from flask import jsonify, Response
 
     openapi_spec = generate_openapi_schema(schemas)
 
+    # Method 1: explicit CustomRoute objects
+    if custom_routes:
+        custom_paths = custom_routes_to_openapi_paths(custom_routes)
+        openapi_spec["paths"].update(custom_paths)
+
+    # Method 2: auto-discover @api_doc decorated views (done lazily on first request)
+    _discovered = {"done": False}
+
     @blueprint.route("/openapi.json", methods=["GET"], endpoint="flashapi_openapi")
     def openapi_json():
+        if not _discovered["done"] and flask_app is not None:
+            discovered = discover_flask_views(flask_app)
+            openapi_spec["paths"].update(discovered)
+            _discovered["done"] = True
         return jsonify(openapi_spec)
 
     @blueprint.route("/docs", methods=["GET"], endpoint="flashapi_docs")
@@ -136,8 +169,11 @@ def _create_flask_routes(
         def list_items(_table=table, _fields=field_names, _exp=expandable):
             items = storage.list_all(_table)
             params = dict(request.args)
-            page = int(params.get("page", 1))
-            page_size = int(params.get("page_size", 20))
+            try:
+                page = max(1, int(params.get("page", 1)))
+                page_size = max(1, min(100, int(params.get("page_size", 20))))
+            except (ValueError, TypeError):
+                return jsonify({"error": "Invalid page or page_size parameter"}), 400
             sort = params.get("sort")
             search = params.get("search")
             expand = params.get("expand")
@@ -168,7 +204,9 @@ def _create_flask_routes(
     if "create" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["POST"], endpoint=f"{table}_create")
         def create_item(_table=table, _fields=field_names):
-            body = request.get_json()
+            body = request.get_json(silent=True)
+            if not body:
+                return jsonify({"error": "Request body is required"}), 400
             data = {k: v for k, v in body.items() if k in _fields}
             item = storage.create(_table, data)
             return jsonify(create_item_response(item, formatter)), 201
@@ -176,7 +214,9 @@ def _create_flask_routes(
     if "update" in schema.permissions:
         @blueprint.route(f"/{table}/<int:item_id>", methods=["PUT"], endpoint=f"{table}_update")
         def update_item(item_id, _table=table, _fields=field_names):
-            body = request.get_json()
+            body = request.get_json(silent=True)
+            if not body:
+                return jsonify({"error": "Request body is required"}), 400
             data = {k: v for k, v in body.items() if k in _fields}
             item = storage.update(_table, item_id, data)
             if item is None:
