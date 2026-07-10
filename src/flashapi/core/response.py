@@ -1,6 +1,6 @@
 """Response formatting."""
 
-from typing import Any, Callable
+from typing import Callable
 
 
 def default_formatter(data: list | dict, meta: dict | None = None) -> dict:

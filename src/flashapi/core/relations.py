@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from flashapi.core.schema import ModelSchema, RelationSchema
-from flashapi.core.pluralize import pluralize
 
 
 def resolve_relations(schemas: list[ModelSchema]) -> dict[str, list[RelationSchema]]:
@@ -15,7 +14,6 @@ def resolve_relations(schemas: list[ModelSchema]) -> dict[str, list[RelationSche
     So "authors" -> [RelationSchema(type="one_to_many", target="books")]
     """
     schema_map = {s.name.lower(): s for s in schemas}
-    schema_plural_map = {s.plural: s for s in schemas}
 
     parent_to_children: dict[str, list[RelationSchema]] = {}
 

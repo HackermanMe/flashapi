@@ -45,9 +45,6 @@ class DjangoORMStorage(Storage):
             return False
 
     def _to_dict(self, instance) -> dict[str, Any]:
-        from datetime import date, datetime, time
-        from decimal import Decimal
-        import uuid
 
         data = {}
         for field in instance._meta.get_fields():
