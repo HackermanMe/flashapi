@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "python-flashapi"
-version = "0.1.0"
+version = "0.1.2"
 description = "Define your models. FlashAPI does the rest."
 readme = "README.md"
 license = "MIT"

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="FlashAPI" width="400">
+  <img src="https://raw.githubusercontent.com/HackermanMe/flashapi/main/docs/logo.svg" alt="FlashAPI" width="400">
 </p>
 
 <p align="center">
