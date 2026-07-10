@@ -196,6 +196,7 @@ GET /articles/?expand=author,category,editor
 | `expand=nonexistent` (field doesn't exist) | Silently ignored, no error |
 | Nested route with empty results | Returns `{"data": [], "total": 0, ...}` |
 | Model with `_id` field but target not registered | No nested route, no expand — just a normal integer field |
+| Model has a field named `expand` | The query parameter `?expand=` takes priority for relation expansion. To filter by the field, use `?expand__eq=value` or rename the field |
 
 ---
 

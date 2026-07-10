@@ -30,7 +30,9 @@ Every model you register gets 5 endpoints automatically:
 
 ### Create (POST)
 
-Send a JSON body with the fields. The `id` field is auto-generated — never send it.
+Send a JSON body with the fields. Auto-incremented primary keys (like `id = Column(Integer, primary_key=True)`) are excluded from the request body — FlashAPI generates them automatically.
+
+**If your primary key is NOT auto-incremented** (e.g. `matricule = Column(String(20), primary_key=True)`), FlashAPI will include it in the request body because you need to provide it yourself.
 
 ```bash
 curl -X POST http://localhost:8000/products/ \

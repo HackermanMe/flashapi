@@ -7,6 +7,10 @@
 ## Table of Contents
 
 - [Core Principle](#core-principle)
+- [Custom routes in Swagger docs](#custom-routes-in-swagger-docs)
+  - [FastAPI](#custom-routes-fastapi)
+  - [Django](#custom-routes-django)
+  - [Flask](#custom-routes-flask)
 - [What FlashAPI does NOT do](#what-flashapi-does-not-do)
 - [Adding custom endpoints (Django)](#adding-custom-endpoints-django)
 - [Adding custom endpoints (FastAPI)](#adding-custom-endpoints-fastapi)
@@ -21,6 +25,152 @@
 **FlashAPI generates additional routes. It does not modify, override, or interfere with anything else in your project.**
 
 Think of FlashAPI like a colleague who writes all the boring CRUD code for you. Your existing code stays untouched. You can always add more routes alongside FlashAPI's generated routes.
+
+---
+
+## Custom routes in Swagger docs
+
+Your custom endpoints appear **in the same Swagger documentation** as FlashAPI's auto-generated CRUD. Just add `@api_doc()` on your view — FlashAPI discovers them automatically. Like `drf-spectacular`, but simpler.
+
+### Custom routes (FastAPI)
+
+Use `@flash.get()`, `@flash.post()`, etc. — same as `@app.get()` but appears in Swagger:
+
+```python
+from fastapi import Request
+from flashapi.fastapi import FlashAPI
+from models import Base, Plat, Commande, Client
+
+flash = FlashAPI(models=[Plat, Commande, Client], engine=engine)
+app = flash.app
+
+@flash.get("/stats/revenue", tag="Statistics", summary="Get total revenue")
+async def revenue():
+    return {"revenue": 42000, "currency": "EUR"}
+
+@flash.post("/checkout", tag="Business Logic", summary="Process checkout")
+async def checkout(request: Request):
+    body = await request.json()
+    return {"order_id": 1, "status": "confirmed"}
+
+@flash.get("/reports/bestsellers", tag="Reports", summary="Top selling dishes")
+async def bestsellers(limit: int = 10):
+    return {"top": [...]}
+```
+
+### Custom routes (Django)
+
+Just add `@api_doc()` on your views. FlashAPI auto-discovers them:
+
+```python
+# views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from flashapi import api_doc
+import json
+
+@api_doc(tag="Commandes", summary="Passer une commande", methods=["post"],
+         body={"client_id": "int", "table_id": "int", "plats": "array"},
+         body_required=["client_id", "table_id", "plats"])
+@csrf_exempt
+def checkout(request):
+    body = json.loads(request.body)
+    # your business logic...
+    return JsonResponse({"commande_id": 1, "statut": "en_preparation"}, status=201)
+
+@api_doc(tag="Statistiques", summary="Chiffre d'affaires", params={"date": "string"})
+def chiffre_affaires(request):
+    jour = request.GET.get("date")
+    # your logic...
+    return JsonResponse({"date": jour, "chiffre_affaires": 15000})
+
+@api_doc(tag="Rapports", summary="Plats les plus vendus", params={"limit": "int"})
+def bestsellers(request):
+    return JsonResponse({"top": [...]})
+```
+
+```python
+# urls.py
+from django.urls import path, include
+from flashapi.django import generate_urls
+from myapp.models import Plat, Commande, Client
+from myapp import views
+
+# Your custom URL patterns
+custom_views = [
+    path("checkout/", views.checkout),
+    path("stats/chiffre-affaires/", views.chiffre_affaires),
+    path("reports/bestsellers/", views.bestsellers),
+]
+
+urlpatterns = [
+    path("api/", include(
+        generate_urls(models=[Plat, Commande, Client], extra_views=custom_views)
+        + custom_views
+    )),
+]
+```
+
+That's it. `@api_doc` on the view + pass `extra_views` to `generate_urls()`. FlashAPI reads the decorator metadata and adds your endpoints to Swagger — no duplicate declarations.
+
+### Custom routes (Flask)
+
+Same `@api_doc()` decorator — FlashAPI auto-discovers them from your Flask app:
+
+```python
+from flask import Flask, request, jsonify
+from flashapi.flask import register_models
+from flashapi import api_doc
+from models import Plat, Commande, Client
+
+app = Flask(__name__)
+register_models(app, models=[Plat, Commande, Client])
+
+@app.route("/checkout", methods=["POST"])
+@api_doc(tag="Commandes", summary="Passer une commande",
+         body={"client_id": "int", "table_id": "int", "plats": "array"},
+         body_required=["client_id", "table_id"])
+def checkout():
+    body = request.get_json()
+    return jsonify({"commande_id": 1}), 201
+
+@app.route("/stats/revenue")
+@api_doc(tag="Statistiques", summary="Chiffre d'affaires", params={"date": "string"})
+def revenue():
+    return jsonify({"revenue": 42000})
+```
+
+No extra configuration needed. FlashAPI scans the Flask app and finds all `@api_doc` views.
+
+### @api_doc reference
+
+```python
+from flashapi import api_doc
+
+@api_doc(
+    tag="Business Logic",           # Group in Swagger UI
+    summary="Process checkout",     # One-line description
+    methods=["post"],               # HTTP methods (auto-detected if omitted)
+    body={                          # Request body fields (for POST/PUT/PATCH)
+        "client_id": "int",
+        "table_id": "int",
+        "notes": "string",
+    },
+    body_required=["client_id"],    # Required fields in body
+    params={                        # Query parameters
+        "limit": "int",
+        "date": "string",
+    },
+    response={                      # Response schema (optional, raw OpenAPI)
+        "type": "object",
+        "properties": {"id": {"type": "integer"}}
+    },
+)
+def my_view(request):
+    ...
+```
+
+Available types for `body` and `params`: `str`, `int`, `float`, `bool`, `array`, `object`
 
 ---
 

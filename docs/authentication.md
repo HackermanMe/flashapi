@@ -367,6 +367,115 @@ Then your middleware handles WHO can access the remaining endpoints:
 
 ---
 
+## CORS
+
+FlashAPI does not configure CORS. If your frontend runs on a different origin (e.g. `localhost:3000` calling `localhost:8000`), you must configure CORS yourself:
+
+### FastAPI
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+flash = FlashAPI(models=[Product, Order])
+app = flash.app
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # your frontend
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### Flask
+
+```bash
+pip install flask-cors
+```
+
+```python
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:3000"])
+register_models(app, models=[Product, Order])
+```
+
+### Django
+
+```bash
+pip install django-cors-headers
+```
+
+```python
+# settings.py
+INSTALLED_APPS = [..., "corsheaders", ...]
+MIDDLEWARE = ["corsheaders.middleware.CorsMiddleware", ...]
+CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
+```
+
+---
+
+## Rate Limiting
+
+FlashAPI does not include rate limiting. For production APIs, add it at your level:
+
+### FastAPI (slowapi)
+
+```bash
+pip install slowapi
+```
+
+```python
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    # slowapi integrates via decorators or middleware
+    return await call_next(request)
+```
+
+### Flask (flask-limiter)
+
+```bash
+pip install flask-limiter
+```
+
+```python
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+```
+
+### Django (django-ratelimit)
+
+```bash
+pip install django-ratelimit
+```
+
+Use as a middleware or decorator on your custom views. FlashAPI-generated views run through your middleware stack, so a rate-limiting middleware protects them automatically.
+
+### Reverse proxy (recommended for production)
+
+For serious rate limiting, use nginx or a cloud provider (Cloudflare, AWS WAF):
+
+```nginx
+# nginx.conf
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
+location /api/ {
+    limit_req zone=api burst=20 nodelay;
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+
+---
+
 ## Related Docs
 
 - [Integration Guide](integration.md)

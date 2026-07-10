@@ -6,12 +6,305 @@
 
 ## Table of Contents
 
+- [Restaurant (FastAPI + SQLAlchemy)](#restaurant-fastapi--sqlalchemy)
+- [Library (Flask + Flask-SQLAlchemy)](#library-flask--flask-sqlalchemy)
 - [E-Commerce (FastAPI + Pydantic)](#e-commerce-fastapi--pydantic)
 - [School Management (Django)](#school-management-django)
-- [Restaurant (FastAPI + Pydantic)](#restaurant-fastapi--pydantic)
 - [Blog (Flask + Pydantic)](#blog-flask--pydantic)
 - [Multi-tenant SaaS (Django)](#multi-tenant-saas-django)
 - [Minimal API (dataclass)](#minimal-api-dataclass)
+
+---
+
+## Restaurant (FastAPI + SQLAlchemy)
+
+**Real-world project with a real database. Most common use case.**
+
+### File structure
+```
+gestionRestaurant/
+├── main.py
+├── models.py
+├── database.py
+└── restaurant.db
+```
+
+### `database.py`
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+DATABASE_URL = "sqlite:///./restaurant.db"
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+class Base(DeclarativeBase):
+    pass
+```
+
+### `models.py`
+```python
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, ForeignKey, Numeric
+from sqlalchemy.orm import relationship
+from database import Base
+
+class CategorieMenu(Base):
+    __tablename__ = 'categories_menu'
+    id = Column(Integer, primary_key=True, index=True)
+    nom = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    plats = relationship('Plat', back_populates='categorie')
+
+class Plat(Base):
+    __tablename__ = 'plats'
+    id = Column(Integer, primary_key=True, index=True)
+    nom = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    prix = Column(Numeric(8, 2), nullable=False)
+    categorie_id = Column(Integer, ForeignKey('categories_menu.id'), nullable=False)
+    disponible = Column(Boolean, default=True)
+    temps_preparation = Column(Integer, nullable=True)
+    est_vegetarien = Column(Boolean, default=False)
+    categorie = relationship('CategorieMenu', back_populates='plats')
+
+class Client(Base):
+    __tablename__ = 'clients'
+    id = Column(Integer, primary_key=True, index=True)
+    nom = Column(String(100), nullable=False)
+    telephone = Column(String(20), nullable=True)
+    email = Column(String(200), nullable=True)
+
+class TableRestaurant(Base):
+    __tablename__ = 'tables'
+    id = Column(Integer, primary_key=True, index=True)
+    numero = Column(Integer, nullable=False, unique=True)
+    capacite = Column(Integer, nullable=False)
+    est_libre = Column(Boolean, default=True)
+
+class Commande(Base):
+    __tablename__ = 'commandes'
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey('clients.id'), nullable=False)
+    table_id = Column(Integer, ForeignKey('tables.id'), nullable=False)
+    statut = Column(String(20), default='en_cours')
+    montant_total = Column(Numeric(10, 2), default=0)
+
+class LigneCommande(Base):
+    __tablename__ = 'lignes_commande'
+    id = Column(Integer, primary_key=True, index=True)
+    commande_id = Column(Integer, ForeignKey('commandes.id'), nullable=False)
+    plat_id = Column(Integer, ForeignKey('plats.id'), nullable=False)
+    quantite = Column(Integer, default=1)
+    prix_unitaire = Column(Numeric(8, 2), nullable=False)
+```
+
+### `main.py`
+```python
+from flashapi.fastapi import FlashAPI
+from flashapi import Model
+from database import engine, Base
+from models import CategorieMenu, Plat, Client, TableRestaurant, Commande, LigneCommande
+
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+# FlashAPI — one line
+app = FlashAPI(
+    models=[
+        CategorieMenu,
+        Plat,
+        Client,
+        Model(TableRestaurant, plural="tables"),
+        Model(Commande, exclude=["delete"]),
+        LigneCommande,
+    ],
+    engine=engine,
+).app
+```
+
+### Run
+```bash
+pip install flashapi[fastapi] sqlalchemy
+uvicorn main:app --reload
+```
+
+### What you get
+```
+GET/POST     /categories_menu          CRUD for categories
+GET/PUT/DEL  /categories_menu/{id}
+GET/POST     /plats                    CRUD for dishes
+GET/PUT/DEL  /plats/{id}
+GET/POST     /clients                  CRUD for clients
+GET/PUT/DEL  /clients/{id}
+GET/POST     /tables                   Custom plural name
+GET/PUT/DEL  /tables/{id}
+GET/POST     /commandes                No DELETE (exclude=["delete"])
+GET/PUT      /commandes/{id}
+GET/POST     /lignes_commande
+GET/PUT/DEL  /lignes_commande/{id}
+GET          /categories_menu/{id}/plats     Nested (auto-detected)
+GET          /clients/{id}/commandes         Nested (auto-detected)
+GET          /commandes/{id}/lignes_commande Nested (auto-detected)
+GET          /docs                           Swagger UI
+```
+
+All data goes to `restaurant.db`. No extra database.
+
+---
+
+## Library (Flask + Flask-SQLAlchemy)
+
+**Real-world Flask project with Flask-SQLAlchemy.**
+
+### File structure
+```
+gestionBibliotheque/
+├── app.py
+├── models.py
+└── instance/
+    └── bibliotheque.db
+```
+
+### `models.py`
+```python
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
+
+class Auteur(db.Model):
+    __tablename__ = 'auteurs'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(100), nullable=False)
+    prenom = db.Column(db.String(100), nullable=False)
+    nationalite = db.Column(db.String(50))
+    livres = db.relationship('Livre', back_populates='auteur')
+
+class Editeur(db.Model):
+    __tablename__ = 'editeurs'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(200), nullable=False)
+    adresse = db.Column(db.String(300))
+
+class Categorie(db.Model):
+    __tablename__ = 'categories'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(100), nullable=False, unique=True)
+    livres = db.relationship('Livre', back_populates='categorie')
+
+class Livre(db.Model):
+    __tablename__ = 'livres'
+    id = db.Column(db.Integer, primary_key=True)
+    titre = db.Column(db.String(200), nullable=False)
+    isbn = db.Column(db.String(13), unique=True)
+    auteur_id = db.Column(db.Integer, db.ForeignKey('auteurs.id'), nullable=False)
+    categorie_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    editeur_id = db.Column(db.Integer, db.ForeignKey('editeurs.id'))
+    annee_publication = db.Column(db.Integer)
+    auteur = db.relationship('Auteur', back_populates='livres')
+    categorie = db.relationship('Categorie', back_populates='livres')
+
+class Adherent(db.Model):
+    __tablename__ = 'adherents'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(100), nullable=False)
+    prenom = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(200), unique=True)
+    telephone = db.Column(db.String(20))
+    actif = db.Column(db.Boolean, default=True)
+
+class Emprunt(db.Model):
+    __tablename__ = 'emprunts'
+    id = db.Column(db.Integer, primary_key=True)
+    livre_id = db.Column(db.Integer, db.ForeignKey('livres.id'), nullable=False)
+    adherent_id = db.Column(db.Integer, db.ForeignKey('adherents.id'), nullable=False)
+    date_emprunt = db.Column(db.String(10), nullable=False)
+    date_retour_prevue = db.Column(db.String(10), nullable=False)
+    date_retour_effective = db.Column(db.String(10))
+    rendu = db.Column(db.Boolean, default=False)
+
+class Reservation(db.Model):
+    __tablename__ = 'reservations'
+    id = db.Column(db.Integer, primary_key=True)
+    livre_id = db.Column(db.Integer, db.ForeignKey('livres.id'), nullable=False)
+    adherent_id = db.Column(db.Integer, db.ForeignKey('adherents.id'), nullable=False)
+    date_reservation = db.Column(db.String(10), nullable=False)
+    statut = db.Column(db.String(20), default='en_attente')
+
+class Amende(db.Model):
+    __tablename__ = 'amendes'
+    id = db.Column(db.Integer, primary_key=True)
+    emprunt_id = db.Column(db.Integer, db.ForeignKey('emprunts.id'), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    payee = db.Column(db.Boolean, default=False)
+
+class Personnel(db.Model):
+    __tablename__ = 'personnel'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(100), nullable=False)
+    role = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(200))
+```
+
+### `app.py`
+```python
+from flask import Flask
+from flashapi.flask import register_models
+from flashapi import Model
+from models import db, Auteur, Editeur, Categorie, Livre, Adherent, Emprunt, Reservation, Amende, Personnel
+
+
+def create_app():
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///bibliotheque.db'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    # Step 1: Init Flask-SQLAlchemy
+    db.init_app(app)
+
+    with app.app_context():
+        # Step 2: Create tables
+        db.create_all()
+
+        # Step 3: Register FlashAPI (INSIDE app_context, with engine=db.engine)
+        register_models(app, models=[
+            Auteur,
+            Editeur,
+            Categorie,
+            Livre,
+            Adherent,
+            Model(Emprunt, exclude=["delete"]),
+            Reservation,
+            Model(Amende, exclude=["delete"]),
+            Model(Personnel, readonly=True),
+        ], engine=db.engine)
+
+    return app
+
+
+if __name__ == '__main__':
+    app = create_app()
+    app.run(debug=True, port=5000)
+```
+
+### Run
+```bash
+pip install flashapi[flask] flask-sqlalchemy
+python app.py
+```
+
+### What you get
+```
+http://localhost:5000/docs        → Swagger UI
+http://localhost:5000/auteurs     → GET (list), POST (create)
+http://localhost:5000/livres      → Full CRUD
+http://localhost:5000/adherents   → Full CRUD
+http://localhost:5000/emprunts    → No DELETE
+http://localhost:5000/personnel   → Read-only (GET list + GET detail)
+http://localhost:5000/auteurs/1/livres  → Nested list
+```
+
+All data in `bibliotheque.db`. No extra database.
 
 ---
 

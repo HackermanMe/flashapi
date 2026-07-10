@@ -232,7 +232,7 @@ class Product(BaseModel):
     description: str = ""    # Optional with default
 ```
 
-- `id` field is auto-added (auto-increment integer) — do NOT define it
+- `id` field is auto-added (auto-increment integer) — do NOT define it in your Pydantic model
 - Default values make fields optional in POST requests
 - Validation is handled by Pydantic at the model level
 

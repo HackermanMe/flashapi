@@ -1,0 +1,25 @@
+<svg width="387" height="122" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient y2="100%" x2="100%" y1="0%" x1="0%" id="bolt">
+   <stop stop-color="#FFD700" offset="0%"/>
+   <stop stop-color="#FF8C00" offset="100%"/>
+  </linearGradient>
+ </defs>
+ <!-- Lightning bolt icon -->
+ <!-- FlashAPI text -->
+ <!-- Tagline -->
+ <g>
+  <title>Layer 1</title>
+  <text font-style="italic" id="svg_2" fill="#ffffff" font-weight="bold" font-size="42" font-family="Inter, -apple-system, sans-serif" y="71" x="112">Flash</text>
+  <text font-style="italic" id="svg_3" fill="url(#bolt)" font-weight="bold" font-size="42" font-family="Inter, -apple-system, sans-serif" y="70" x="222">API</text>
+  <text style="cursor: move;" id="svg_4" fill="#666" font-size="13" font-family="Inter, -apple-system, sans-serif" y="95" x="113">Define your models. FlashAPI does the rest.</text>
+  <g>
+   <circle opacity="0.35" r="48" cy="63.5" cx="52"/>
+   <circle fill="#ffc400" r="48" cy="59.5" cx="52"/>
+   <circle opacity="0.35" r="39" cy="63.5" cx="52"/>
+   <circle fill="#ff1200" r="39" cy="59.5" cx="52"/>
+   <polygon opacity="0.35" points="83,8.5 34,59.5 50.01200866699219,56.45100402832031 29.772994995117188,85.5 45,82.5 22,117.5 69,70.5 55,72.5 76,44.5 59,49.5 "/>
+   <polygon points="83,4.5 34,55.5 50.01200866699219,52.45100402832031 29.772994995117188,81.5 45,78.5 22,113.5 69,66.5 55,68.5 76,40.5 59,45.5 " fill="#ffc400"/>
+  </g>
+ </g>
+</svg>
