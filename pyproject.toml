@@ -33,9 +33,9 @@ all = ["fastapi>=0.100.0", "uvicorn>=0.20.0", "django>=4.2", "flask>=2.3.0"]
 dev = ["pytest>=7.0", "pytest-asyncio", "httpx", "ruff"]
 
 [project.urls]
-Homepage = "https://github.com/flashapi/flashapi"
-Documentation = "https://flashapi.dev"
-Repository = "https://github.com/flashapi/flashapi"
+Homepage = "https://github.com/HackermanMe/flashapi"
+Documentation = "https://github.com/HackermanMe/flashapi#readme"
+Repository = "https://github.com/HackermanMe/flashapi"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/flashapi"]

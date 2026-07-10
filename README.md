@@ -8,8 +8,9 @@
 
 <p align="center">
   <a href="https://pypi.org/project/python-flashapi/"><img src="https://img.shields.io/pypi/v/python-flashapi?color=blue" alt="PyPI version"></a>
+  <a href="https://github.com/HackermanMe/flashapi/actions/workflows/ci.yml"><img src="https://github.com/HackermanMe/flashapi/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/python-flashapi/"><img src="https://img.shields.io/pypi/pyversions/python-flashapi" alt="Python versions"></a>
-  <a href="https://github.com/flashapi/flashapi/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://github.com/HackermanMe/flashapi/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
 </p>
 
 <p align="center">
