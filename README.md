@@ -1,6 +1,25 @@
-# FlashAPI
+<p align="center">
+  <img src="docs/logo.svg" alt="FlashAPI" width="400">
+</p>
 
-**Define your models. FlashAPI does the rest.**
+<p align="center">
+  <strong>Define your models. FlashAPI does the rest.</strong>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/python-flashapi/"><img src="https://img.shields.io/pypi/v/python-flashapi?color=blue" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/python-flashapi/"><img src="https://img.shields.io/pypi/pyversions/python-flashapi" alt="Python versions"></a>
+  <a href="https://github.com/flashapi/flashapi/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> &bull;
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="docs/integration.md">Docs</a> &bull;
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+---
 
 FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, full-text search, relations, and interactive documentation from your existing models — in one line.
 
@@ -24,7 +43,7 @@ FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, fu
 ## Installation
 
 ```bash
-pip install flashapi[fastapi]   # or flashapi[django] or flashapi[flask] or flashapi[all]
+pip install python-flashapi[fastapi]   # or python-flashapi[django] or python-flashapi[flask] or python-flashapi[all]
 ```
 
 ---

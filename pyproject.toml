@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "flashapi"
+name = "python-flashapi"
 version = "0.1.0"
 description = "Define your models. FlashAPI does the rest."
 readme = "README.md"
@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-fastapi = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
+fastapi = ["fastapi>=0.100.0", "uvicorn>=0.20.0", "pydantic>=2.0"]
 django = ["django>=4.2"]
 flask = ["flask>=2.3.0"]
 all = ["fastapi>=0.100.0", "uvicorn>=0.20.0", "django>=4.2", "flask>=2.3.0"]
