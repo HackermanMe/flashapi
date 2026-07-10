@@ -46,13 +46,26 @@ class SQLAlchemyInspector(Inspector):
                 target_table = fk.column.table.name
                 relation = RelationSchema(type="many_to_one", target=target_table)
 
+            has_default = col.default is not None or col.server_default is not None
+            is_auto_int = (
+                col.primary_key
+                and col.autoincrement is not False
+                and field_type == FieldType.INTEGER
+            )
+            auto_generated = is_auto_int or (col.primary_key and has_default)
+
+            default_value = None
+            if col.default and not callable(getattr(col.default, "arg", None)):
+                default_value = col.default.arg
+
             fields.append(FieldSchema(
                 name=col.name,
                 type=field_type,
-                required=not col.nullable and not col.primary_key,
-                default=col.default.arg if col.default and callable(col.default.arg) is False else None,
+                required=not col.nullable and not col.primary_key and not has_default,
+                default=default_value,
                 constraints=constraints,
                 primary_key=col.primary_key,
+                auto_generated=auto_generated,
                 relation=relation,
             ))
 

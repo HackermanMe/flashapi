@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any, get_origin, get_args
+from uuid import UUID
 
 from flashapi.core.schema import FieldSchema, FieldType, ModelSchema
 from flashapi.core.pluralize import pluralize
@@ -11,19 +14,26 @@ TYPE_MAP: dict[type, FieldType] = {
     int: FieldType.INTEGER,
     float: FieldType.FLOAT,
     bool: FieldType.BOOLEAN,
+    datetime: FieldType.DATETIME,
+    date: FieldType.DATE,
+    time: FieldType.TIME,
+    UUID: FieldType.UUID,
+    Decimal: FieldType.FLOAT,
+    bytes: FieldType.BINARY,
+    dict: FieldType.JSON,
+    list: FieldType.JSON,
 }
 
 
 class PydanticInspector(Inspector):
     def inspect(self, model_class: type, plural: str | None = None) -> ModelSchema:
         from pydantic import BaseModel
-        from pydantic.fields import FieldInfo
 
         if not issubclass(model_class, BaseModel):
             raise TypeError(f"{model_class} is not a Pydantic model")
 
         fields: list[FieldSchema] = []
-        fields.append(FieldSchema(name="id", type=FieldType.INTEGER, required=False, primary_key=True))
+        fields.append(FieldSchema(name="id", type=FieldType.INTEGER, required=False, primary_key=True, auto_generated=True))
 
         for name, field_info in model_class.model_fields.items():
             field_type = self._resolve_type(field_info.annotation)

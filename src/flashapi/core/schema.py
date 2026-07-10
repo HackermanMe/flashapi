@@ -35,6 +35,7 @@ class FieldSchema:
     default: Any = None
     constraints: dict = field(default_factory=dict)
     primary_key: bool = False
+    auto_generated: bool = False
     relation: RelationSchema | None = None
 
 

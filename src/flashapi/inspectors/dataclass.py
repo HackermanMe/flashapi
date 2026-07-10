@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import fields as dc_fields, MISSING
-from typing import Any
 
 from flashapi.core.schema import FieldSchema, FieldType, ModelSchema
 from flashapi.core.pluralize import pluralize
@@ -19,7 +18,7 @@ class DataclassInspector(Inspector):
     def inspect(self, model_class: type, plural: str | None = None) -> ModelSchema:
         schema_fields: list[FieldSchema] = []
         schema_fields.append(
-            FieldSchema(name="id", type=FieldType.INTEGER, required=False, primary_key=True)
+            FieldSchema(name="id", type=FieldType.INTEGER, required=False, primary_key=True, auto_generated=True)
         )
 
         for f in dc_fields(model_class):

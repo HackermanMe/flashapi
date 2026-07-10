@@ -57,8 +57,12 @@ class DjangoInspector(Inspector):
                 field_type = FieldType.INTEGER
 
             is_pk = getattr(f, "primary_key", False)
-            required = not getattr(f, "blank", False) and not getattr(f, "null", False)
-            default = f.default if hasattr(f, "default") and f.default is not None else None
+            auto_generated = field_type_name in ("AutoField", "BigAutoField", "SmallAutoField")
+            has_default = hasattr(f, "default") and f.default is not None
+            if is_pk and has_default and not auto_generated:
+                auto_generated = True
+            required = not getattr(f, "blank", False) and not getattr(f, "null", False) and not has_default
+            default = f.default if has_default else None
 
             field_name = getattr(f, "attname", f.name) if is_fk else f.name
 
@@ -69,6 +73,7 @@ class DjangoInspector(Inspector):
                 default=default,
                 constraints=constraints,
                 primary_key=is_pk,
+                auto_generated=auto_generated,
                 relation=relation,
             ))
 

@@ -56,8 +56,8 @@ def generate_openapi_schema(
     components_schemas = {}
 
     for schema in schemas:
-        model_schema_def = _build_model_schema(schema)
-        components_schemas[schema.name] = model_schema_def
+        components_schemas[schema.name] = _build_model_schema(schema)
+        components_schemas[f"{schema.name}Create"] = _build_model_schema(schema, exclude_auto_pk=True)
         model_paths = _build_paths(schema, trailing_slash=trailing_slash)
         paths.update(model_paths)
 
@@ -75,11 +75,13 @@ def generate_openapi_schema(
     }
 
 
-def _build_model_schema(schema: ModelSchema) -> dict:
+def _build_model_schema(schema: ModelSchema, *, exclude_auto_pk: bool = False) -> dict:
     properties = {}
     required = []
 
     for field in schema.fields:
+        if exclude_auto_pk and field.primary_key and field.auto_generated:
+            continue
         prop = dict(FIELD_TYPE_TO_OPENAPI.get(field.type, {"type": "string"}))
         if field.constraints.get("max_length"):
             prop["maxLength"] = field.constraints["max_length"]
@@ -141,7 +143,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "summary": f"Create a {schema.name.lower()}",
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}"}}}
+                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}}
             },
             "responses": {
                 "201": {
@@ -182,7 +184,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             ],
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}"}}}
+                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}}
             },
             "responses": {
                 "200": {
