@@ -40,6 +40,7 @@ class PydanticInspector(Inspector):
             constraints = self._extract_constraints(field_info)
             required = field_info.is_required()
             default = field_info.default if not required else None
+            visibility = self._extract_visibility(field_info)
 
             fields.append(FieldSchema(
                 name=name,
@@ -47,6 +48,7 @@ class PydanticInspector(Inspector):
                 required=required,
                 default=default,
                 constraints=constraints,
+                **visibility,
             ))
 
         model_name = model_class.__name__
@@ -82,3 +84,12 @@ class PydanticInspector(Inspector):
             if hasattr(m, "le"):
                 constraints["max_value"] = m.le
         return constraints
+
+    def _extract_visibility(self, field_info: Any) -> dict:
+        visibility = {}
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        flash = extra.get("flash", {}) if isinstance(extra, dict) else {}
+        for key in ("readonly", "writeonly", "hidden", "export_exclude"):
+            if flash.get(key):
+                visibility[key] = True
+        return visibility

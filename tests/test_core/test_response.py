@@ -1,22 +1,8 @@
 from flashapi.core.response import (
-    default_formatter,
     create_list_response,
     create_item_response,
+    create_error_response,
 )
-
-
-class TestDefaultFormatter:
-    def test_list_data(self):
-        result = default_formatter([{"id": 1}], {"total": 1})
-        assert result == {"data": [{"id": 1}], "total": 1}
-
-    def test_single_item(self):
-        result = default_formatter({"id": 1, "name": "test"})
-        assert result == {"data": {"id": 1, "name": "test"}}
-
-    def test_list_without_meta(self):
-        result = default_formatter([{"id": 1}])
-        assert result == {"data": [{"id": 1}]}
 
 
 class TestCreateListResponse:
@@ -24,32 +10,41 @@ class TestCreateListResponse:
         result = create_list_response(
             data=[{"id": 1}],
             total=50,
-            page=1,
-            page_size=20,
+            page=0,
+            size=20,
         )
         assert result == {
             "data": [{"id": 1}],
-            "total": 50,
-            "page": 1,
-            "pages": 3,
-            "page_size": 20,
+            "meta": {
+                "page": 0,
+                "size": 20,
+                "totalElements": 50,
+                "totalPages": 3,
+            },
         }
 
-    def test_pages_calculation(self):
-        result = create_list_response([], total=0, page=1, page_size=20)
-        assert result["pages"] == 0
+    def test_page_zero_indexed(self):
+        result = create_list_response([], total=0, page=0, size=20)
+        assert result["meta"]["page"] == 0
+        assert result["meta"]["totalPages"] == 0
 
     def test_pages_exact_division(self):
-        result = create_list_response([], total=40, page=1, page_size=20)
-        assert result["pages"] == 2
+        result = create_list_response([], total=40, page=0, size=20)
+        assert result["meta"]["totalPages"] == 2
+
+    def test_pages_remainder(self):
+        result = create_list_response([], total=41, page=0, size=20)
+        assert result["meta"]["totalPages"] == 3
 
     def test_custom_formatter(self):
-        def custom(data, meta):
-            return {"results": data, "info": meta}
+        def custom(response):
+            response["custom"] = True
+            return response
 
-        result = create_list_response([{"id": 1}], total=1, page=1, page_size=10, formatter=custom)
-        assert "results" in result
-        assert "info" in result
+        result = create_list_response([{"id": 1}], total=1, page=0, size=10, formatter=custom)
+        assert result["custom"] is True
+        assert "data" in result
+        assert "meta" in result
 
 
 class TestCreateItemResponse:
@@ -58,8 +53,20 @@ class TestCreateItemResponse:
         assert result == {"data": {"id": 1, "name": "Alice"}}
 
     def test_custom_formatter(self):
-        def custom(data, meta):
-            return {"item": data}
+        def custom(response):
+            response["wrapped"] = True
+            return response
 
         result = create_item_response({"id": 1}, formatter=custom)
-        assert result == {"item": {"id": 1}}
+        assert result["wrapped"] is True
+        assert result["data"] == {"id": 1}
+
+
+class TestCreateErrorResponse:
+    def test_basic(self):
+        result = create_error_response("Not found", 404)
+        assert result == {"error": "Not found", "status": 404}
+
+    def test_400(self):
+        result = create_error_response("Bad request", 400)
+        assert result == {"error": "Bad request", "status": 400}

@@ -15,6 +15,14 @@ TYPE_MAP: dict[type, FieldType] = {
 
 
 class DataclassInspector(Inspector):
+    def _extract_visibility(self, f) -> dict:
+        visibility = {}
+        meta = f.metadata or {}
+        for key in ("readonly", "writeonly", "hidden", "export_exclude"):
+            if meta.get(key):
+                visibility[key] = True
+        return visibility
+
     def inspect(self, model_class: type, plural: str | None = None) -> ModelSchema:
         schema_fields: list[FieldSchema] = []
         schema_fields.append(
@@ -25,12 +33,14 @@ class DataclassInspector(Inspector):
             field_type = TYPE_MAP.get(f.type, FieldType.STRING)
             required = f.default is MISSING and f.default_factory is MISSING
             default = None if required else f.default
+            visibility = self._extract_visibility(f)
 
             schema_fields.append(FieldSchema(
                 name=f.name,
                 type=field_type,
                 required=required,
                 default=default,
+                **visibility,
             ))
 
         model_name = model_class.__name__

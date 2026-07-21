@@ -6,6 +6,7 @@
 
 ## Table of Contents
 
+- [Base Path](#base-path)
 - [Model Wrapper](#model-wrapper)
   - [readonly](#readonly)
   - [exclude](#exclude)
@@ -15,8 +16,28 @@
 - [Custom Plural Names](#custom-plural-names)
 - [Custom Response Format](#custom-response-format)
 - [Custom Database Path](#custom-database-path)
+- [Feature Toggles](#feature-toggles)
 - [Disable Documentation](#disable-documentation)
 - [Model Support Details](#model-support-details)
+
+---
+
+## Base Path
+
+All generated routes use a configurable base path. Default is `/api`.
+
+```python
+# Default: /api/products, /api/orders, ...
+FlashAPI(models=[Product])
+
+# Custom: /v2/products, /v2/orders, ...
+FlashAPI(models=[Product], base_path="/v2")
+
+# Another example
+FlashAPI(models=[Product], base_path="/custom-prefix")
+```
+
+This mirrors Spring Boot's `flashapi.base-path` configuration. All routes (CRUD, bulk, export, dashboard) use this prefix.
 
 ---
 
@@ -38,11 +59,11 @@ Model(Product, readonly=True)
 
 Generated endpoints:
 ```
-GET /products/       ✓
-GET /products/{id}/  ✓
-POST /products/      ✗ (not generated)
-PUT /products/{id}/  ✗ (not generated)
-DELETE /products/{id}/ ✗ (not generated)
+GET /api/products       ✓
+GET /api/products/{id}  ✓
+POST /api/products      ✗ (not generated)
+PUT /api/products/{id}  ✗ (not generated)
+DELETE /api/products/{id} ✗ (not generated)
 ```
 
 ### exclude
@@ -71,7 +92,7 @@ Model(Log, only=["list"])                  # List only, no detail view
 Override the auto-generated plural name used in the URL:
 
 ```python
-Model(Person, plural="people")             # /people/ instead of /persons/
+Model(Person, plural="people")             # /api/people instead of /api/persons
 Model(EmploiDuTemps, plural="emplois-du-temps")  # Custom French plural
 Model(MatrixData, plural="matrix-data")    # Invariable
 ```
@@ -130,30 +151,42 @@ Model(Curriculum, plural="curricula")
 ### Default format
 
 ```json
-// List
-{"data": [...], "total": 42, "page": 1, "pages": 3, "page_size": 20}
+// List response
+{
+  "data": [...],
+  "meta": {
+    "page": 0,
+    "size": 20,
+    "totalElements": 42,
+    "totalPages": 3
+  }
+}
 
-// Single item
+// Single item response
 {"data": {"id": 1, "name": "..."}}
+
+// Error response
+{"error": "Not found", "status": 404}
 ```
 
 ### Custom formatter function
 
+The formatter receives the full pre-built response object and can transform it:
+
 ```python
-def my_formatter(data, meta):
+def my_formatter(response):
     """
-    data: the actual data (list or dict)
-    meta: {"total": int, "page": int, "pages": int, "page_size": int} (only for lists)
+    response: the full response dict (always contains "data", and "meta" for lists)
     """
-    if meta:  # List response
+    if "meta" in response:  # List response
+        meta = response["meta"]
         return {
-            "results": data,
-            "count": meta["total"],
-            "next_page": meta["page"] + 1 if meta["page"] < meta["pages"] else None,
-            "previous_page": meta["page"] - 1 if meta["page"] > 1 else None,
+            "results": response["data"],
+            "count": meta["totalElements"],
+            "next_page": meta["page"] + 1 if meta["page"] < meta["totalPages"] - 1 else None,
         }
     else:  # Single item response
-        return {"result": data}
+        return {"result": response["data"]}
 ```
 
 ### Using the formatter
@@ -162,9 +195,6 @@ def my_formatter(data, meta):
 # FastAPI
 FlashAPI(models=[User, Product], formatter=my_formatter)
 
-# Django
-generate_urls(models=[User, Product], formatter=my_formatter)
-
 # Flask
 register_models(app, models=[User, Product], formatter=my_formatter)
 ```
@@ -172,15 +202,16 @@ register_models(app, models=[User, Product], formatter=my_formatter)
 ### DRF-style response format example
 
 ```python
-def drf_style(data, meta):
-    if meta:
+def drf_style(response):
+    if "meta" in response:
+        meta = response["meta"]
         return {
-            "count": meta["total"],
-            "next": f"?page={meta['page']+1}" if meta["page"] < meta["pages"] else None,
-            "previous": f"?page={meta['page']-1}" if meta["page"] > 1 else None,
-            "results": data,
+            "count": meta["totalElements"],
+            "next": f"?page={meta['page']+1}" if meta["page"] < meta["totalPages"] - 1 else None,
+            "previous": f"?page={meta['page']-1}" if meta["page"] > 0 else None,
+            "results": response["data"],
         }
-    return data  # Single item returned as-is (no wrapper)
+    return response["data"]  # Single item returned as-is (no wrapper)
 ```
 
 ---
@@ -204,14 +235,42 @@ FlashAPI(models=[User, Product], database="/tmp/test.db")
 
 ---
 
+## Feature Toggles
+
+All features are configurable via constructor parameters:
+
+```python
+FlashAPI(
+    models=[Product, Order],
+    base_path="/api",           # URL prefix (default: "/api")
+    database="app.db",         # SQLite path (Pydantic/dataclass only)
+    formatter=None,            # Custom response formatter
+    audit=True,                # Audit trail (default: True)
+    webhook_urls=[],           # Webhook target URLs (default: [])
+    rate_limit=None,           # Requests per window (default: None = disabled)
+    rate_window=60,            # Window in seconds (default: 60)
+    docs=True,                 # Enable interactive docs (default: True)
+)
+```
+
+| Feature | Enabled by | Disabled by |
+|---------|-----------|-------------|
+| Soft delete | Always on | — |
+| Bulk create | Always on | — |
+| Export | Always on | — |
+| Dashboard | Always on | — |
+| Audit trail | `audit=True` (default) | `audit=False` |
+| Webhooks | `webhook_urls=["..."]` | Default (empty list) |
+| Rate limiting | `rate_limit=100` | Default (None) |
+| Interactive docs | `docs=True` (default) | `docs=False` |
+
+---
+
 ## Disable Documentation
 
 ```python
 # FastAPI — disables /docs and /redoc
 FlashAPI(models=[User, Product], docs=False)
-
-# Django — does not generate /docs/ or /openapi.json routes
-generate_urls(models=[User, Product], docs=False)
 ```
 
 Useful for production if you don't want the API schema publicly accessible.
@@ -223,32 +282,36 @@ Useful for production if you don't want the API schema publicly accessible.
 ### Pydantic models
 
 ```python
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class Product(BaseModel):
     name: str
     price: float
-    in_stock: bool = True    # Optional with default
-    description: str = ""    # Optional with default
+    in_stock: bool = True
+    description: str = ""
+    internal_code: str = Field(default="", json_schema_extra={"flash": {"hidden": True}})
 ```
 
 - `id` field is auto-added (auto-increment integer) — do NOT define it in your Pydantic model
 - Default values make fields optional in POST requests
 - Validation is handled by Pydantic at the model level
+- Field visibility controlled via `json_schema_extra={"flash": {...}}`
 
 ### dataclass models
 
 ```python
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class Product:
     name: str
     price: float
     in_stock: bool = True
+    secret: str = field(default="", metadata={"hidden": True})
 ```
 
 - Same behavior as Pydantic: auto `id`, SQLite storage
+- Field visibility controlled via `metadata={...}`
 
 ### Django models
 
@@ -281,15 +344,17 @@ class Product(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(200))
     price = Column(Float)
+    secret = Column(String, info={"hidden": True})
 ```
 
 - Uses your SQLAlchemy engine
+- Field visibility controlled via `Column(info={...})`
 
 ---
 
 ## Related Docs
 
 - [Integration Guide](integration.md)
-- [Features (CRUD, pagination, filtering, sorting, search)](features.md)
+- [Features (all endpoints, pagination, soft delete, export, audit, etc.)](features.md)
 - [Relations (nested routes, expand)](relations.md)
 - [Authentication & Permissions](authentication.md)

@@ -22,7 +22,9 @@
 
 ---
 
-FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, full-text search, relations, and interactive documentation from your existing models — in one line.
+FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, full-text search, relations, soft delete, bulk operations, export, audit trail, webhooks, rate limiting, and a live dashboard — from your existing models, in one line.
+
+Part of the **FlashAPI Ecosystem** — ensuring SDK client compatibility across all backends (Python, Java Spring, Node.js).
 
 ---
 
@@ -30,13 +32,13 @@ FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, fu
 
 | Doc | Description |
 |-----|-------------|
-| **[Integration Guide](docs/integration.md)** | Where to put FlashAPI in your project, new vs existing project, all 3 frameworks |
-| **[Features](docs/features.md)** | CRUD, pagination, filtering, sorting, search — detailed usage |
+| **[Integration Guide](docs/integration.md)** | Where to put FlashAPI in your project, new vs existing project |
+| **[Features](docs/features.md)** | CRUD, pagination, soft delete, bulk, export, audit, webhooks, rate limiting, dashboard |
 | **[Relations](docs/relations.md)** | Nested routes, expand, how relations are detected |
-| **[Customization](docs/customization.md)** | Model wrapper, readonly, exclude, only, plural, response format, database |
+| **[Customization](docs/customization.md)** | Base path, Model wrapper, response format, feature toggles |
 | **[Authentication](docs/authentication.md)** | How to protect endpoints (Django middleware, FastAPI deps, Flask before_request) |
-| **[Custom Logic](docs/custom-logic.md)** | How FlashAPI coexists with your business logic, when to use what |
-| **[Framework Notes](docs/framework-notes.md)** | Django, FastAPI, Flask specifics (serialization, URLs, field behavior) |
+| **[Custom Logic](docs/custom-logic.md)** | How FlashAPI coexists with your business logic |
+| **[Framework Notes](docs/framework-notes.md)** | Django, FastAPI, Flask specifics |
 | **[Full Examples](docs/examples.md)** | E-commerce, school, restaurant, blog, SaaS, minimal todo |
 
 ---
@@ -44,7 +46,7 @@ FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, fu
 ## Installation
 
 ```bash
-pip install python-flashapi[fastapi]   # or python-flashapi[django] or python-flashapi[flask] or python-flashapi[all]
+pip install python-flashapi[fastapi]   # or python-flashapi[flask] or python-flashapi[all]
 ```
 
 ---
@@ -71,48 +73,44 @@ uvicorn main:app --reload
 # Open http://localhost:8000/docs
 ```
 
+That's it. You now have:
+
+```
+GET    /api/products           → List (paginated, filterable, sortable, searchable)
+POST   /api/products           → Create
+GET    /api/products/{id}      → Read
+PUT    /api/products/{id}      → Update
+DELETE /api/products/{id}      → Soft delete
+POST   /api/products/{id}/restore  → Restore
+POST   /api/products/bulk      → Bulk create
+GET    /api/products/export    → Export (CSV/XLSX/PDF)
+GET    /api/products/{id}/history  → Audit trail
+GET    /api/dashboard          → Live dashboard
+```
+
 ### FastAPI (existing project)
 
 ```python
-# main.py — you already have app = FastAPI(...)
 from fastapi import FastAPI
 from flashapi.fastapi import FlashAPI
 from models import Product, Order
 
 app = FastAPI(title="My App")
 
-# Your existing routes stay untouched
 @app.get("/health")
 async def health():
     return {"ok": True}
 
-# Mount FlashAPI under /api
+# Mount FlashAPI — all routes under /api by default
 flash = FlashAPI(models=[Product, Order])
 app.mount("/api", flash.app)
 ```
 
-See [Integration Guide](docs/integration.md) for all patterns (Option A/B/C).
-
-### Django
-
-```python
-# urls.py
-from django.urls import path, include
-from flashapi.django import generate_urls
-from myapp.models import Product, Order, Customer
-
-urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("api/", include(generate_urls(models=[Product, Order, Customer]))),
-]
-```
-
-Open `http://localhost:8000/api/docs/` for Swagger UI.
+See [Integration Guide](docs/integration.md) for all patterns.
 
 ### Flask
 
 ```python
-# app.py
 from flask import Flask
 from flashapi.flask import register_models
 from models import Product, Order
@@ -121,7 +119,22 @@ app = Flask(__name__)
 register_models(app, models=[Product, Order])
 ```
 
-Open `http://localhost:5000/docs` for Swagger UI.
+---
+
+## Response Format
+
+All responses follow a consistent format:
+
+```json
+// List
+{"data": [...], "meta": {"page": 0, "size": 20, "totalElements": 42, "totalPages": 3}}
+
+// Single item
+{"data": {"id": 1, "name": "Laptop", "price": 999.99}}
+
+// Error
+{"error": "Not found", "status": 404}
+```
 
 ---
 
@@ -129,16 +142,20 @@ Open `http://localhost:5000/docs` for Swagger UI.
 
 For every model, FlashAPI generates:
 
-```
-GET    /{plural}/           → List (paginated, filterable, sortable, searchable)
-POST   /{plural}/           → Create
-GET    /{plural}/{id}/      → Read
-PUT    /{plural}/{id}/      → Update
-DELETE /{plural}/{id}/      → Delete
-GET    /{parent}/{id}/{children}/  → Nested list (auto-detected relations)
-```
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/{entities}` | Paginated list with filtering, sorting, search |
+| `POST /api/{entities}` | Create |
+| `GET /api/{entities}/{id}` | Read one |
+| `PUT /api/{entities}/{id}` | Update |
+| `DELETE /api/{entities}/{id}` | Soft delete |
+| `POST /api/{entities}/{id}/restore` | Restore deleted |
+| `POST /api/{entities}/bulk` | Bulk create |
+| `GET /api/{entities}/export?format=csv` | Export (csv, xlsx, pdf) |
+| `GET /api/{entities}/{id}/history` | Audit trail |
+| `GET /api/dashboard` | Live metrics dashboard |
 
-Plus: `?expand=relation` to inline related objects, and Swagger UI docs.
+Plus: `?expand=relation` to inline related objects, `?deleted=true` to view deleted items, and Swagger UI docs.
 
 ---
 
@@ -158,13 +175,20 @@ Plus: `?expand=relation` to inline related objects, and Swagger UI docs.
 ```python
 from flashapi import Model
 
-FlashAPI(models=[
-    Product,                               # Full CRUD
-    Model(Order, exclude=["delete"]),      # No delete
-    Model(Config, readonly=True),          # GET only
-    Model(Log, only=["list"]),             # List only
-    Model(Animal, plural="animaux"),       # Custom plural
-])
+FlashAPI(
+    models=[
+        Product,                               # Full CRUD
+        Model(Order, exclude=["delete"]),      # No delete
+        Model(Config, readonly=True),          # GET only
+        Model(Log, only=["list"]),             # List only
+        Model(Animal, plural="animaux"),       # Custom plural
+    ],
+    base_path="/api",       # Configurable prefix (default: /api)
+    audit=True,             # Audit trail
+    webhook_urls=["http://localhost:9090/hooks"],
+    rate_limit=100,         # 100 requests per window
+    rate_window=60,         # 60 seconds window
+)
 ```
 
 See [Customization docs](docs/customization.md) for all options.
@@ -175,9 +199,9 @@ See [Customization docs](docs/customization.md) for all options.
 
 FlashAPI does NOT handle auth. You protect routes using your framework's standard mechanisms:
 
-- **Django**: middleware ([example](docs/authentication.md#django-middleware))
 - **FastAPI**: dependencies / middleware ([example](docs/authentication.md#fastapi-dependency-injection))
 - **Flask**: `before_request` ([example](docs/authentication.md#flask-before_request))
+- **Django**: middleware ([example](docs/authentication.md#django-middleware))
 
 See [Authentication docs](docs/authentication.md) for full examples including RBAC, JWT, API keys.
 
@@ -188,11 +212,9 @@ See [Authentication docs](docs/authentication.md) for full examples including RB
 FlashAPI does not interfere with your project. Add custom endpoints alongside:
 
 ```python
-# FlashAPI handles CRUD
 flash = FlashAPI(models=[Product, Order])
 app = flash.app
 
-# You handle business logic
 @app.post("/checkout")
 async def checkout(request):
     # Payment, emails, inventory...
@@ -206,6 +228,7 @@ See [Custom Logic docs](docs/custom-logic.md) for patterns and decision guide.
 ## Philosophy
 
 - **FlashAPI handles CRUD, you handle business logic.** No black magic, no monkey-patching.
+- **Standardized.** One SDK client works seamlessly across backends.
 - **Zero intrusion.** Does not modify your models, migrations, or existing code.
 - **Composable.** Use it for 2 models or 20. Mix with custom endpoints freely.
 - **No opinion on auth.** Your project, your rules.

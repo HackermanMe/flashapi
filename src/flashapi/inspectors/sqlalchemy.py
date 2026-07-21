@@ -58,6 +58,12 @@ class SQLAlchemyInspector(Inspector):
             if col.default and not callable(getattr(col.default, "arg", None)):
                 default_value = col.default.arg
 
+            visibility = {}
+            info = getattr(col, "info", {}) or {}
+            for key in ("readonly", "writeonly", "hidden", "export_exclude"):
+                if info.get(key):
+                    visibility[key] = True
+
             fields.append(FieldSchema(
                 name=col.name,
                 type=field_type,
@@ -67,6 +73,7 @@ class SQLAlchemyInspector(Inspector):
                 primary_key=col.primary_key,
                 auto_generated=auto_generated,
                 relation=relation,
+                **visibility,
             ))
 
         model_name = model_class.__name__

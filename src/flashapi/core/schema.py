@@ -37,6 +37,10 @@ class FieldSchema:
     primary_key: bool = False
     auto_generated: bool = False
     relation: RelationSchema | None = None
+    readonly: bool = False
+    writeonly: bool = False
+    hidden: bool = False
+    export_exclude: bool = False
 
 
 @dataclass

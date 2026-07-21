@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-RESERVED_PARAMS = {"page", "page_size", "sort", "search"}
+RESERVED_PARAMS = {"page", "size", "sort", "search", "deleted", "expand", "format"}
 
 
 def apply_filters(

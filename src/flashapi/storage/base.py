@@ -14,7 +14,7 @@ class Storage(ABC):
         ...
 
     @abstractmethod
-    def list_all(self, table: str) -> list[dict[str, Any]]:
+    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         ...
 
     @abstractmethod
@@ -22,5 +22,11 @@ class Storage(ABC):
         ...
 
     @abstractmethod
-    def delete(self, table: str, item_id: int | str) -> bool:
+    def delete(self, table: str, item_id: int | str, *, soft: bool = True) -> bool:
         ...
+
+    def restore(self, table: str, item_id: int | str) -> bool:
+        return False
+
+    def bulk_create(self, table: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [self.create(table, item) for item in items]
