@@ -97,11 +97,64 @@ Model(EmploiDuTemps, plural="emplois-du-temps")  # Custom French plural
 Model(MatrixData, plural="matrix-data")    # Invariable
 ```
 
+### soft_delete
+
+Controls whether DELETE performs a soft delete (marks as deleted) or a hard delete (removes from DB). Default: `True`.
+
+```python
+Model(LogEntry, soft_delete=False)  # DELETE really removes the row
+Model(Product, soft_delete=True)    # DELETE marks as deleted (default)
+```
+
+When `soft_delete=False`:
+- No `?deleted=true` parameter
+- No `/restore` endpoint
+- DELETE permanently removes the record
+
+### audit
+
+Controls whether CRUD operations are recorded in the audit trail. Default: `True`.
+
+```python
+Model(TempData, audit=False)   # No history endpoint, no audit log
+Model(Invoice, audit=True)     # Full audit trail (default)
+```
+
+When `audit=False`:
+- No `/{id}/history` endpoint generated
+- Operations are not logged
+
+### lookup_field
+
+Use a different field (like a UUID) instead of the auto-increment `id` for URL lookups. Default: `"id"`.
+
+```python
+Model(User, lookup_field="uuid")      # /api/users/{uuid} instead of /api/users/{id}
+Model(Product, lookup_field="slug")   # /api/products/{slug}
+```
+
+The field must exist in the model. Example with Pydantic:
+
+```python
+import uuid as uuid_mod
+from pydantic import BaseModel, Field
+
+class User(BaseModel):
+    uuid: str = Field(default_factory=lambda: str(uuid_mod.uuid4()))
+    name: str
+    email: str
+
+# URLs use UUID: GET /api/users/550e8400-e29b-41d4-a716-446655440000
+FlashAPI(models=[Model(User, lookup_field="uuid")])
+```
+
 ### Combining options
 
 ```python
 Model(AuditLog, readonly=True, plural="audit-logs")
 Model(Report, only=["list", "read"], plural="reports")
+Model(Session, soft_delete=False, audit=False)  # Ephemeral data
+Model(Article, lookup_field="slug", audit=True)  # URL by slug, with audit
 ```
 
 **Note:** `readonly=True` and `only=[...]` are mutually exclusive — use one or the other.
@@ -237,7 +290,27 @@ FlashAPI(models=[User, Product], database="/tmp/test.db")
 
 ## Feature Toggles
 
-All features are configurable via constructor parameters:
+Features are controlled at two levels:
+
+### Per-entity (via `Model()`)
+
+```python
+from flashapi import Model
+
+FlashAPI(models=[
+    Model(Product, soft_delete=True, audit=True),        # Default: everything on
+    Model(LogEntry, soft_delete=False, audit=False),     # Ephemeral data
+    Model(Article, lookup_field="slug"),                  # URL by slug
+])
+```
+
+| Option | Default | Effect when disabled |
+|--------|---------|---------------------|
+| `soft_delete=True` | `True` | No restore, no `?deleted=true`, DELETE is permanent |
+| `audit=True` | `True` | No `/history` endpoint, no audit log |
+| `lookup_field="id"` | `"id"` | URLs use the specified field instead of PK |
+
+### Global (via constructor)
 
 ```python
 FlashAPI(
@@ -245,7 +318,6 @@ FlashAPI(
     base_path="/api",           # URL prefix (default: "/api")
     database="app.db",         # SQLite path (Pydantic/dataclass only)
     formatter=None,            # Custom response formatter
-    audit=True,                # Audit trail (default: True)
     webhook_urls=[],           # Webhook target URLs (default: [])
     rate_limit=None,           # Requests per window (default: None = disabled)
     rate_window=60,            # Window in seconds (default: 60)
@@ -255,11 +327,9 @@ FlashAPI(
 
 | Feature | Enabled by | Disabled by |
 |---------|-----------|-------------|
-| Soft delete | Always on | — |
 | Bulk create | Always on | — |
 | Export | Always on | — |
 | Dashboard | Always on | — |
-| Audit trail | `audit=True` (default) | `audit=False` |
 | Webhooks | `webhook_urls=["..."]` | Default (empty list) |
 | Rate limiting | `rate_limit=100` | Default (None) |
 | Interactive docs | `docs=True` (default) | `docs=False` |

@@ -449,9 +449,13 @@ def create_app():
 FlashAPI(
     models=[...],             # Required. List of model classes or Model() wrappers.
     engine=engine,            # For SQLAlchemy models: uses YOUR database.
+    base_path="/api",         # URL prefix. Default: "/api".
     database="flashapi.db",   # For Pydantic/dataclass models only: SQLite file path.
     docs=True,                # Enable /docs and /redoc. Default: True.
     formatter=my_func,        # Custom response format function.
+    webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
+    rate_limit=100,           # Requests per window. Default: None (disabled).
+    rate_window=60,           # Window in seconds. Default: 60.
 )
 ```
 
@@ -462,6 +466,7 @@ register_models(
     app,                      # Your Flask app instance.
     models=[...],             # Required. List of model classes or Model() wrappers.
     engine=db.engine,         # For SQLAlchemy/Flask-SQLAlchemy: uses YOUR database.
+    base_path="/api",         # URL prefix. Default: "/api".
     database="flashapi.db",   # For Pydantic/dataclass models only: SQLite file path.
     docs=True,                # Enable /docs and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
@@ -474,12 +479,30 @@ register_models(
 generate_urls(
     models=[...],             # Required. List of model classes or Model() wrappers.
     extra_views=[...],        # URL patterns with @api_doc views (auto-discovered).
+    base_path="/api",         # URL prefix. Default: "/api".
     docs=True,                # Enable /docs/ and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
 )
 ```
 
 No `engine=` for Django — it always uses the Django ORM.
+
+### Per-entity options — `Model()`
+
+```python
+from flashapi import Model
+
+Model(
+    MyModel,
+    readonly=False,           # GET only (no create/update/delete). Default: False.
+    exclude=["delete"],       # Remove specific operations.
+    only=["list", "read"],    # Keep ONLY these operations.
+    plural="custom-name",     # Override auto-pluralization.
+    soft_delete=True,         # Soft delete on DELETE. Default: True.
+    audit=True,               # Audit trail (/history). Default: True.
+    lookup_field="id",        # Field used in URLs. Default: "id".
+)
+```
 
 ### When to use `engine=` vs `database=`
 
