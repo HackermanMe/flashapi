@@ -5,7 +5,7 @@ from typing import Callable
 from flashapi.core.schema import Model, ModelSchema
 from flashapi.core.response import create_list_response, create_item_response, create_error_response
 from flashapi.core.relations import resolve_relations, find_expandable_fields
-from flashapi.core.visibility import filter_response, filter_input, writable_fields, export_fields
+from flashapi.core.visibility import filter_response, writable_fields, export_fields
 from flashapi.core.custom_routes import (
     CustomRoute, custom_routes_to_openapi_paths, discover_flask_views,
 )
@@ -51,13 +51,16 @@ def register_models(
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
+        schema.soft_delete = wrapper.soft_delete
+        schema.audit = wrapper.audit
+        schema.lookup_field = wrapper.lookup_field
 
         is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
 
         if is_sa and session_factory is not None:
             storage = SQLAlchemyStorage(session_factory, wrapper.model_class)
         else:
-            auto_storage.ensure_table(schema)
+            auto_storage.ensure_table(schema, soft_delete=schema.soft_delete)
             storage = auto_storage
 
         storages[schema.plural] = storage
@@ -168,12 +171,17 @@ def _create_flask_routes(
     table = schema.plural
     field_names = {f.name for f in schema.fields if not f.primary_key}
     input_fields = writable_fields(model_schema)
+    lookup_field = schema.lookup_field
+    supports_soft_delete = schema.soft_delete
+
+    id_converter = "int" if lookup_field == "id" else "string"
 
     if "list" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["GET"], endpoint=f"{table}_list")
         def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema):
             deleted_param = request.args.get("deleted", "false").lower() == "true"
-            items = storage.list_all(_table, include_deleted=deleted_param)
+            include_deleted = deleted_param and supports_soft_delete
+            items = storage.list_all(_table, include_deleted=include_deleted)
             params = dict(request.args)
             try:
                 page = max(0, int(params.get("page", 0)))
@@ -196,9 +204,9 @@ def _create_flask_routes(
             return jsonify(create_list_response(page_items, total, page, size, formatter))
 
     if "read" in schema.permissions:
-        @blueprint.route(f"/{table}/<int:item_id>", methods=["GET"], endpoint=f"{table}_get")
-        def get_item(item_id, _table=table, _exp=expandable, _schema=model_schema):
-            item = storage.get(_table, item_id)
+        @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["GET"], endpoint=f"{table}_get")
+        def get_item(item_id, _table=table, _exp=expandable, _schema=model_schema, _lf=lookup_field):
+            item = storage.get(_table, item_id, lookup_field=_lf)
             if item is None:
                 return jsonify(create_error_response("Not found", 404)), 404
 
@@ -221,32 +229,33 @@ def _create_flask_routes(
             return jsonify(create_item_response(item, formatter)), 201
 
     if "update" in schema.permissions:
-        @blueprint.route(f"/{table}/<int:item_id>", methods=["PUT"], endpoint=f"{table}_update")
-        def update_item(item_id, _table=table, _input=input_fields, _schema=model_schema):
+        @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["PUT"], endpoint=f"{table}_update")
+        def update_item(item_id, _table=table, _input=input_fields, _schema=model_schema, _lf=lookup_field):
             body = request.get_json(silent=True)
             if not body:
                 return jsonify(create_error_response("Request body is required", 400)), 400
             data = {k: v for k, v in body.items() if k in _input}
-            item = storage.update(_table, item_id, data)
+            item = storage.update(_table, item_id, data, lookup_field=_lf)
             if item is None:
                 return jsonify(create_error_response("Not found", 404)), 404
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter))
 
     if "delete" in schema.permissions:
-        @blueprint.route(f"/{table}/<int:item_id>", methods=["DELETE"], endpoint=f"{table}_delete")
-        def delete_item(item_id, _table=table):
-            deleted = storage.delete(_table, item_id)
+        @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["DELETE"], endpoint=f"{table}_delete")
+        def delete_item(item_id, _table=table, _lf=lookup_field):
+            deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
             if not deleted:
                 return jsonify(create_error_response("Not found", 404)), 404
             return "", 204
 
-        @blueprint.route(f"/{table}/<int:item_id>/restore", methods=["POST"], endpoint=f"{table}_restore")
-        def restore_item(item_id, _table=table):
-            restored = storage.restore(_table, item_id)
-            if not restored:
-                return jsonify(create_error_response("Not found", 404)), 404
-            return "", 204
+        if supports_soft_delete:
+            @blueprint.route(f"/{table}/<{id_converter}:item_id>/restore", methods=["POST"], endpoint=f"{table}_restore")
+            def restore_item(item_id, _table=table, _lf=lookup_field):
+                restored = storage.restore(_table, item_id, lookup_field=_lf)
+                if not restored:
+                    return jsonify(create_error_response("Not found", 404)), 404
+                return "", 204
 
     if "create" in schema.permissions:
         @blueprint.route(f"/{table}/bulk", methods=["POST"], endpoint=f"{table}_bulk_create")

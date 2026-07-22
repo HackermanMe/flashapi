@@ -9,7 +9,7 @@ from pydantic import BaseModel, create_model
 from flashapi.core.schema import Model, ModelSchema, FieldType
 from flashapi.core.response import create_list_response, create_item_response, create_error_response
 from flashapi.core.relations import resolve_relations, find_expandable_fields
-from flashapi.core.visibility import filter_response, filter_input, writable_fields, export_fields
+from flashapi.core.visibility import filter_response, writable_fields, export_fields
 from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
 from flashapi.features.export import EXPORTERS, CONTENT_TYPES
 from flashapi.features.dashboard import MetricsCollector, DASHBOARD_HTML
@@ -19,6 +19,16 @@ from flashapi.storage.sqlalchemy import SQLAlchemyStorage
 
 
 DEFAULT_BASE_PATH = "/api"
+
+
+def _parse_lookup_id(value: str, lookup_field: str):
+    """Parse the URL path parameter to the appropriate type."""
+    if lookup_field == "id":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return value
 
 FIELD_TYPE_TO_PYTHON = {
     FieldType.STRING: str,
@@ -113,8 +123,8 @@ class FlashAPI:
         for schema in self._schemas:
             self._metrics.register_entity(
                 schema.name,
-                soft_delete=True,
-                audit=audit,
+                soft_delete=schema.soft_delete,
+                audit=schema.audit,
                 webhook=bool(webhook_urls),
                 rate_limited=bool(rate_limit),
             )
@@ -131,13 +141,16 @@ class FlashAPI:
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
+        schema.soft_delete = wrapper.soft_delete
+        schema.audit = wrapper.audit
+        schema.lookup_field = wrapper.lookup_field
 
         is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
 
         if is_sa and self._session_factory is not None:
             storage = SQLAlchemyStorage(self._session_factory, wrapper.model_class)
         else:
-            self._auto_storage.ensure_table(schema)
+            self._auto_storage.ensure_table(schema, soft_delete=schema.soft_delete)
             storage = self._auto_storage
 
         self._storages[schema.plural] = storage
@@ -209,6 +222,7 @@ class FlashAPI:
         create_model_cls = _build_pydantic_model(schema)
         update_model_cls = _build_pydantic_model(schema, all_optional=True)
         model_schema = schema
+        lookup_field = schema.lookup_field
 
         if "list" in schema.permissions:
             self._add_list_route(table, field_names, formatter, storage, schema.name, expandable, model_schema)
@@ -218,22 +232,24 @@ class FlashAPI:
             self._add_create_route(table, input_fields, formatter, storage, schema.name, create_model_cls, model_schema)
             self._add_bulk_create_route(table, input_fields, formatter, storage, schema.name, model_schema)
 
-        if "delete" in schema.permissions:
-            self._add_restore_route(table, storage, schema.name)
+        if "delete" in schema.permissions and schema.soft_delete:
+            self._add_restore_route(table, storage, schema.name, lookup_field)
 
         if "read" in schema.permissions:
-            self._add_read_route(table, formatter, storage, schema.name, expandable, model_schema)
-            self._add_history_route(table, schema.name)
+            self._add_read_route(table, formatter, storage, schema.name, expandable, model_schema, lookup_field)
+            if schema.audit:
+                self._add_history_route(table, schema.name, lookup_field)
 
         if "update" in schema.permissions:
-            self._add_update_route(table, input_fields, formatter, storage, schema.name, update_model_cls, model_schema)
+            self._add_update_route(table, input_fields, formatter, storage, schema.name, update_model_cls, model_schema, lookup_field)
 
         if "delete" in schema.permissions:
-            self._add_delete_route(table, storage, schema.name)
+            self._add_delete_route(table, storage, schema.name, lookup_field)
 
     def _add_list_route(self, table, field_names, formatter, storage, tag, expandable, model_schema):
         bp = self._base_path
         metrics = self._metrics
+        supports_soft_delete = model_schema.soft_delete
 
         @self._app.get(f"{bp}/{table}", tags=[tag], name=f"{table}_list")
         async def route(
@@ -245,7 +261,8 @@ class FlashAPI:
             expand: Optional[str] = None,
             deleted: bool = False,
         ):
-            items = storage.list_all(table, include_deleted=deleted)
+            include_deleted = deleted and supports_soft_delete
+            items = storage.list_all(table, include_deleted=include_deleted)
             params = dict(request.query_params)
             items = apply_filters(items, params, field_names)
             if search:
@@ -261,12 +278,14 @@ class FlashAPI:
             page_items = [filter_response(item, model_schema) for item in page_items]
             return create_list_response(page_items, total, page, size, formatter)
 
-    def _add_read_route(self, table, formatter, storage, tag, expandable, model_schema):
+    def _add_read_route(self, table, formatter, storage, tag, expandable, model_schema, lookup_field="id"):
         bp = self._base_path
+        lf = lookup_field
 
         @self._app.get(f"{bp}/{table}/{{item_id}}", tags=[tag], name=f"{table}_read")
-        async def route(item_id: int, expand: Optional[str] = None):
-            item = storage.get(table, item_id)
+        async def route(item_id: str, expand: Optional[str] = None):
+            lookup_id = _parse_lookup_id(item_id, lf)
+            item = storage.get(table, lookup_id, lookup_field=lf)
             if item is None:
                 return JSONResponse(
                     status_code=404,
@@ -279,12 +298,12 @@ class FlashAPI:
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_history_route(self, table, entity_name):
+    def _add_history_route(self, table, entity_name, lookup_field="id"):
         bp = self._base_path
         audit = self._audit
 
         @self._app.get(f"{bp}/{table}/{{item_id}}/history", tags=[entity_name], name=f"{table}_history")
-        async def route(item_id: int):
+        async def route(item_id: str):
             if audit is None:
                 return JSONResponse(status_code=404, content=create_error_response("Audit not enabled", 404))
             history = audit.get_history(entity_name, item_id)
@@ -295,59 +314,68 @@ class FlashAPI:
         audit = self._audit
         webhook = self._webhook
         metrics = self._metrics
+        entity_audit = model_schema.audit
 
         @self._app.post(f"{bp}/{table}", status_code=201, tags=[tag], name=f"{table}_create")
         async def route(body: body_model):
             data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in input_fields}
             item = storage.create(table, data)
             metrics.record("CREATE", tag, str(item.get("id", "")))
-            if audit:
+            if audit and entity_audit:
                 audit.record("CREATE", tag, item.get("id", ""))
             if webhook:
                 webhook.dispatch("CREATE", tag, item.get("id", ""), item)
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_update_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema):
+    def _add_update_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema, lookup_field="id"):
         bp = self._base_path
         audit = self._audit
         webhook = self._webhook
         metrics = self._metrics
+        lf = lookup_field
+        entity_audit = model_schema.audit
 
         @self._app.put(f"{bp}/{table}/{{item_id}}", tags=[tag], name=f"{table}_update")
-        async def route(item_id: int, body: body_model):
-            old_item = storage.get(table, item_id)
+        async def route(item_id: str, body: body_model):
+            lookup_id = _parse_lookup_id(item_id, lf)
+            old_item = storage.get(table, lookup_id, lookup_field=lf)
             data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in input_fields}
-            item = storage.update(table, item_id, data)
+            item = storage.update(table, lookup_id, data, lookup_field=lf)
             if item is None:
                 return JSONResponse(
                     status_code=404,
                     content=create_error_response("Not found", 404),
                 )
             metrics.record("UPDATE", tag, str(item_id))
-            if audit:
+            if audit and entity_audit:
                 audit.record("UPDATE", tag, item_id, old_data=old_item, new_data=item)
             if webhook:
                 webhook.dispatch("UPDATE", tag, item_id, item)
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_delete_route(self, table, storage, tag):
+    def _add_delete_route(self, table, storage, tag, lookup_field="id"):
         bp = self._base_path
         audit = self._audit
         webhook = self._webhook
         metrics = self._metrics
+        lf = lookup_field
+        entity_audit = tag  # reuse tag for entity name in audit
+        schema_audit = next((s.audit for s in self._schemas if s.name == tag), True)
+        schema_soft_delete = next((s.soft_delete for s in self._schemas if s.name == tag), True)
 
         @self._app.delete(f"{bp}/{table}/{{item_id}}", status_code=204, tags=[tag], name=f"{table}_delete")
-        async def route(item_id: int):
-            deleted = storage.delete(table, item_id)
+        async def route(item_id: str):
+            lookup_id = _parse_lookup_id(item_id, lf)
+            deleted = storage.delete(table, lookup_id, soft=schema_soft_delete, lookup_field=lf)
             if not deleted:
                 return JSONResponse(
                     status_code=404,
                     content=create_error_response("Not found", 404),
                 )
             metrics.record("DELETE", tag, str(item_id))
-            if audit:
+            if audit and schema_audit:
                 audit.record("DELETE", tag, item_id)
             if webhook:
                 webhook.dispatch("DELETE", tag, item_id, {})
@@ -400,12 +428,14 @@ class FlashAPI:
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 
-    def _add_restore_route(self, table, storage, tag):
+    def _add_restore_route(self, table, storage, tag, lookup_field="id"):
         bp = self._base_path
+        lf = lookup_field
 
         @self._app.post(f"{bp}/{table}/{{item_id}}/restore", status_code=204, tags=[tag], name=f"{table}_restore")
-        async def route(item_id: int):
-            restored = storage.restore(table, item_id)
+        async def route(item_id: str):
+            lookup_id = _parse_lookup_id(item_id, lf)
+            restored = storage.restore(table, lookup_id, lookup_field=lf)
             if not restored:
                 return JSONResponse(
                     status_code=404,
