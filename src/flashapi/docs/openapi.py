@@ -115,10 +115,12 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"List all {table}",
             "parameters": [
-                {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1}},
-                {"name": "page_size", "in": "query", "schema": {"type": "integer", "default": 20}},
+                {"name": "page", "in": "query", "schema": {"type": "integer", "default": 0}},
+                {"name": "size", "in": "query", "schema": {"type": "integer", "default": 20}},
                 {"name": "sort", "in": "query", "schema": {"type": "string"}},
                 {"name": "search", "in": "query", "schema": {"type": "string"}},
+                {"name": "deleted", "in": "query", "schema": {"type": "boolean", "default": False}},
+                {"name": "expand", "in": "query", "schema": {"type": "string"}},
             ],
             "responses": {
                 "200": {
@@ -127,10 +129,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                         "type": "object",
                         "properties": {
                             "data": {"type": "array", "items": {"$ref": f"#/components/schemas/{schema.name}"}},
-                            "total": {"type": "integer"},
-                            "page": {"type": "integer"},
-                            "pages": {"type": "integer"},
-                            "page_size": {"type": "integer"},
+                            "meta": {"type": "object"},
                         }
                     }}}
                 }
@@ -161,7 +160,8 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"Get a {schema.name.lower()} by ID",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}},
+                {"name": "expand", "in": "query", "schema": {"type": "string"}},
             ],
             "responses": {
                 "200": {
@@ -201,7 +201,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     if "delete" in schema.permissions:
         detail_ops["delete"] = {
             "tags": [tag],
-            "summary": f"Delete a {schema.name.lower()}",
+            "summary": f"Soft delete a {schema.name.lower()}",
             "parameters": [
                 {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
             ],
@@ -216,7 +216,72 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     if detail_ops:
         paths[f"/{table}/{{item_id}}{suffix}"] = detail_ops
 
+    if "delete" in schema.permissions:
+        paths[f"/{table}/{{item_id}}/restore{suffix}"] = {
+            "post": {
+                "tags": [tag],
+                "summary": f"Restore soft-deleted {schema.name.lower()}",
+                "parameters": [
+                    {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                ],
+                "responses": {
+                    "204": {"description": "Restored"},
+                    "404": {"description": "Not found"}
+                }
+            }
+        }
+
+    if "create" in schema.permissions:
+        paths[f"/{table}/bulk{suffix}"] = {
+            "post": {
+                "tags": [tag],
+                "summary": f"Bulk create {table}",
+                "requestBody": {
+                    "required": True,
+                    "content": {"application/json": {"schema": {
+                        "type": "array",
+                        "items": {"$ref": f"#/components/schemas/{schema.name}Create"}
+                    }}}
+                },
+                "responses": {
+                    "201": {
+                        "description": "Bulk created",
+                        "content": {"application/json": {"schema": {"type": "object"}}}
+                    }
+                }
+            }
+        }
+
+    if "list" in schema.permissions:
+        paths[f"/{table}/export{suffix}"] = {
+            "get": {
+                "tags": [tag],
+                "summary": f"Export {table}",
+                "parameters": [
+                    {"name": "format", "in": "query", "schema": {"type": "string", "default": "csv"}}
+                ],
+                "responses": {
+                    "200": {"description": "Export file"}
+                }
+            }
+        }
+
+    if "read" in schema.permissions:
+        paths[f"/{table}/{{item_id}}/history{suffix}"] = {
+            "get": {
+                "tags": [tag],
+                "summary": f"Audit history for {schema.name.lower()}",
+                "parameters": [
+                    {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                ],
+                "responses": {
+                    "200": {"description": "Audit history"}
+                }
+            }
+        }
+
     return paths
+
 
 
 def get_swagger_html(title: str = "FlashAPI", openapi_url: str = "/openapi.json") -> str:

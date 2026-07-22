@@ -31,18 +31,19 @@ def inspect_model(model_class: type, plural: str | None = None) -> ModelSchema:
 def _is_django_model(cls: type) -> bool:
     try:
         from django.db import models
-        return issubclass(cls, models.Model)
+        return isinstance(cls, type) and issubclass(cls, models.Model)
     except ImportError:
         return False
 
 
 def _is_sqlalchemy_model(cls: type) -> bool:
-    return hasattr(cls, "__table__") and hasattr(cls, "__tablename__")
+    return isinstance(cls, type) and hasattr(cls, "__table__") and hasattr(cls, "__tablename__")
 
 
 def _is_pydantic_model(cls: type) -> bool:
     try:
         from pydantic import BaseModel
-        return issubclass(cls, BaseModel)
+        return isinstance(cls, type) and issubclass(cls, BaseModel)
     except ImportError:
         return False
+

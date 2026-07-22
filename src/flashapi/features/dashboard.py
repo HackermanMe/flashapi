@@ -31,7 +31,6 @@ class MetricsCollector:
 
     def record(self, operation: str, entity: str, entity_id: str = "") -> None:
         self._entity_ops[entity][operation] += 1
-        op_key = operation.lower() + "s" if operation != "SEARCH" else "searches"
         if operation == "CREATE":
             self._totals["creates"] += 1
         elif operation == "READ":

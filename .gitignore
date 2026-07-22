@@ -8,3 +8,4 @@ build/
 *.db
 .pytest_cache/
 docs/ecosystem-spec.md
+docs/ecosystem-spec.md

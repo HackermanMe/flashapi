@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flashapi.core.schema import FieldSchema, ModelSchema
+from flashapi.core.schema import ModelSchema
 
 
 def response_fields(schema: ModelSchema) -> set[str]:
