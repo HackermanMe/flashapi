@@ -51,6 +51,9 @@ class ModelSchema:
     permissions: list[str] = field(
         default_factory=lambda: ["list", "read", "create", "update", "delete"]
     )
+    soft_delete: bool = True
+    audit: bool = True
+    lookup_field: str = "id"
 
 
 ALL_OPERATIONS = ["list", "read", "create", "update", "delete"]
@@ -67,9 +70,15 @@ class Model:
         exclude: list[str] | None = None,
         only: list[str] | None = None,
         plural: str | None = None,
+        soft_delete: bool = True,
+        audit: bool = True,
+        lookup_field: str = "id",
     ):
         self.model_class = model_class
         self.plural = plural
+        self.soft_delete = soft_delete
+        self.audit = audit
+        self.lookup_field = lookup_field
         self.permissions = self._resolve_permissions(readonly, exclude, only)
 
     def _resolve_permissions(

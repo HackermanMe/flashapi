@@ -15,20 +15,26 @@ class DjangoORMStorage(Storage):
         instance = self._model.objects.create(**data)
         return self._to_dict(instance)
 
-    def get(self, table: str, item_id: int | str) -> dict[str, Any] | None:
+    def _get_instance(self, item_id, lookup_field="id"):
         try:
-            instance = self._model.objects.get(pk=item_id)
-            return self._to_dict(instance)
+            if lookup_field == "id":
+                return self._model.objects.get(pk=item_id)
+            return self._model.objects.get(**{lookup_field: item_id})
         except self._model.DoesNotExist:
             return None
 
-    def list_all(self, table: str) -> list[dict[str, Any]]:
+    def get(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> dict[str, Any] | None:
+        instance = self._get_instance(item_id, lookup_field)
+        if instance is None:
+            return None
+        return self._to_dict(instance)
+
+    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         return [self._to_dict(obj) for obj in self._model.objects.all()]
 
-    def update(self, table: str, item_id: int | str, data: dict[str, Any]) -> dict[str, Any] | None:
-        try:
-            instance = self._model.objects.get(pk=item_id)
-        except self._model.DoesNotExist:
+    def update(self, table: str, item_id: int | str, data: dict[str, Any], *, lookup_field: str = "id") -> dict[str, Any] | None:
+        instance = self._get_instance(item_id, lookup_field)
+        if instance is None:
             return None
 
         for key, value in data.items():
@@ -36,13 +42,15 @@ class DjangoORMStorage(Storage):
         instance.save()
         return self._to_dict(instance)
 
-    def delete(self, table: str, item_id: int | str) -> bool:
-        try:
-            instance = self._model.objects.get(pk=item_id)
-            instance.delete()
-            return True
-        except self._model.DoesNotExist:
+    def delete(self, table: str, item_id: int | str, *, soft: bool = True, lookup_field: str = "id") -> bool:
+        instance = self._get_instance(item_id, lookup_field)
+        if instance is None:
             return False
+        instance.delete()
+        return True
+
+    def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
+        return False
 
     def _to_dict(self, instance) -> dict[str, Any]:
 

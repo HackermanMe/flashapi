@@ -75,17 +75,18 @@ class AutoStorage(Storage):
         item_id = cursor.lastrowid
         return self._get_raw(table, item_id)
 
-    def get(self, table: str, item_id: int | str) -> dict[str, Any] | None:
-        row = self._get_raw(table, item_id)
+    def get(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> dict[str, Any] | None:
+        row = self._get_raw(table, item_id, lookup_field=lookup_field)
         if row is None:
             return None
         if table in self._soft_delete_tables and row.get("deleted_at"):
             return None
         return self._strip_internal(row, table)
 
-    def _get_raw(self, table: str, item_id: int | str) -> dict[str, Any] | None:
+    def _get_raw(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> dict[str, Any] | None:
         safe_table = _validate_identifier(table)
-        cursor = self._conn.execute(f"SELECT * FROM {safe_table} WHERE id = ?", (item_id,))
+        safe_field = _validate_identifier(lookup_field)
+        cursor = self._conn.execute(f"SELECT * FROM {safe_table} WHERE {safe_field} = ?", (item_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -106,46 +107,49 @@ class AutoStorage(Storage):
             cursor = self._conn.execute(f"SELECT * FROM {safe_table}")
         return [self._strip_internal(dict(row), table) for row in cursor.fetchall()]
 
-    def update(self, table: str, item_id: int | str, data: dict[str, Any]) -> dict[str, Any] | None:
-        if not self.get(table, item_id):
+    def update(self, table: str, item_id: int | str, data: dict[str, Any], *, lookup_field: str = "id") -> dict[str, Any] | None:
+        if not self.get(table, item_id, lookup_field=lookup_field):
             return None
 
         safe_table = _validate_identifier(table)
+        safe_field = _validate_identifier(lookup_field)
         set_clause = ", ".join([f"{_validate_identifier(k)} = ?" for k in data.keys()])
         values = list(data.values()) + [item_id]
 
-        self._conn.execute(f"UPDATE {safe_table} SET {set_clause} WHERE id = ?", values)
+        self._conn.execute(f"UPDATE {safe_table} SET {set_clause} WHERE {safe_field} = ?", values)
         self._conn.commit()
-        return self.get(table, item_id)
+        return self.get(table, item_id, lookup_field=lookup_field)
 
-    def delete(self, table: str, item_id: int | str, *, soft: bool = True) -> bool:
-        raw = self._get_raw(table, item_id)
+    def delete(self, table: str, item_id: int | str, *, soft: bool = True, lookup_field: str = "id") -> bool:
+        raw = self._get_raw(table, item_id, lookup_field=lookup_field)
         if raw is None:
             return False
         if table in self._soft_delete_tables and raw.get("deleted_at"):
             return False
 
         safe_table = _validate_identifier(table)
+        safe_field = _validate_identifier(lookup_field)
         if soft and table in self._soft_delete_tables:
             now = datetime.now(timezone.utc).isoformat()
             self._conn.execute(
-                f"UPDATE {safe_table} SET deleted_at = ? WHERE id = ?", (now, item_id)
+                f"UPDATE {safe_table} SET deleted_at = ? WHERE {safe_field} = ?", (now, item_id)
             )
         else:
-            self._conn.execute(f"DELETE FROM {safe_table} WHERE id = ?", (item_id,))
+            self._conn.execute(f"DELETE FROM {safe_table} WHERE {safe_field} = ?", (item_id,))
         self._conn.commit()
         return True
 
-    def restore(self, table: str, item_id: int | str) -> bool:
+    def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
         if table not in self._soft_delete_tables:
             return False
-        raw = self._get_raw(table, item_id)
+        raw = self._get_raw(table, item_id, lookup_field=lookup_field)
         if raw is None or not raw.get("deleted_at"):
             return False
 
         safe_table = _validate_identifier(table)
+        safe_field = _validate_identifier(lookup_field)
         self._conn.execute(
-            f"UPDATE {safe_table} SET deleted_at = NULL WHERE id = ?", (item_id,)
+            f"UPDATE {safe_table} SET deleted_at = NULL WHERE {safe_field} = ?", (item_id,)
         )
         self._conn.commit()
         return True

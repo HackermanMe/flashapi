@@ -10,7 +10,7 @@ class Storage(ABC):
         ...
 
     @abstractmethod
-    def get(self, table: str, item_id: int | str) -> dict[str, Any] | None:
+    def get(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> dict[str, Any] | None:
         ...
 
     @abstractmethod
@@ -18,14 +18,14 @@ class Storage(ABC):
         ...
 
     @abstractmethod
-    def update(self, table: str, item_id: int | str, data: dict[str, Any]) -> dict[str, Any] | None:
+    def update(self, table: str, item_id: int | str, data: dict[str, Any], *, lookup_field: str = "id") -> dict[str, Any] | None:
         ...
 
     @abstractmethod
-    def delete(self, table: str, item_id: int | str, *, soft: bool = True) -> bool:
+    def delete(self, table: str, item_id: int | str, *, soft: bool = True, lookup_field: str = "id") -> bool:
         ...
 
-    def restore(self, table: str, item_id: int | str) -> bool:
+    def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
         return False
 
     def bulk_create(self, table: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:

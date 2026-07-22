@@ -58,17 +58,25 @@ class SQLAlchemyStorage(Storage):
         finally:
             session.close()
 
-    def get(self, table: str, item_id: int | str) -> dict[str, Any] | None:
+    def _get_by_lookup(self, session, item_id, lookup_field="id"):
+        if lookup_field == "id":
+            return session.get(self._model, item_id)
+        col = getattr(self._model, lookup_field, None)
+        if col is None:
+            return None
+        return session.query(self._model).filter(col == item_id).first()
+
+    def get(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> dict[str, Any] | None:
         session = self._session_factory()
         try:
-            instance = session.get(self._model, item_id)
+            instance = self._get_by_lookup(session, item_id, lookup_field)
             if instance is None:
                 return None
             return self._to_dict(instance)
         finally:
             session.close()
 
-    def list_all(self, table: str) -> list[dict[str, Any]]:
+    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         session = self._session_factory()
         try:
             instances = session.query(self._model).all()
@@ -76,10 +84,10 @@ class SQLAlchemyStorage(Storage):
         finally:
             session.close()
 
-    def update(self, table: str, item_id: int | str, data: dict[str, Any]) -> dict[str, Any] | None:
+    def update(self, table: str, item_id: int | str, data: dict[str, Any], *, lookup_field: str = "id") -> dict[str, Any] | None:
         session = self._session_factory()
         try:
-            instance = session.get(self._model, item_id)
+            instance = self._get_by_lookup(session, item_id, lookup_field)
             if instance is None:
                 return None
             for key, value in self._coerce_values(data).items():
@@ -93,10 +101,10 @@ class SQLAlchemyStorage(Storage):
         finally:
             session.close()
 
-    def delete(self, table: str, item_id: int | str) -> bool:
+    def delete(self, table: str, item_id: int | str, *, soft: bool = True, lookup_field: str = "id") -> bool:
         session = self._session_factory()
         try:
-            instance = session.get(self._model, item_id)
+            instance = self._get_by_lookup(session, item_id, lookup_field)
             if instance is None:
                 return False
             session.delete(instance)
@@ -107,6 +115,9 @@ class SQLAlchemyStorage(Storage):
             raise
         finally:
             session.close()
+
+    def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
+        return False
 
     def _to_dict(self, instance) -> dict[str, Any]:
         data = {}
