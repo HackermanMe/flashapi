@@ -29,6 +29,9 @@ def register_models(
     database: str = "flashapi.db",
     docs: bool = True,
     formatter: Callable | None = None,
+    webhook_urls: list[str] | None = None,
+    rate_limit: int | None = None,
+    rate_window: int = 60,
 ):
     """Register models on an existing Flask app."""
     from flask import Blueprint
@@ -42,6 +45,28 @@ def register_models(
     blueprint = Blueprint("flashapi", __name__, url_prefix=base_path)
     all_schemas: list[ModelSchema] = []
     storages: dict[str, any] = {}
+
+    # Audit
+    audit_log = None
+    if auto_storage:
+        from flashapi.features.audit import AuditLog
+        audit_log = AuditLog(auto_storage._conn)
+
+    # Webhooks
+    webhook = None
+    if webhook_urls:
+        from flashapi.features.webhooks import WebhookDispatcher
+        webhook = WebhookDispatcher(webhook_urls)
+
+    # Rate limiting
+    rate_limiter = None
+    if rate_limit:
+        from flashapi.features.rate_limit import RateLimiter
+        rate_limiter = RateLimiter(limit=rate_limit, window=rate_window)
+
+    # Metrics
+    from flashapi.features.dashboard import MetricsCollector, DASHBOARD_HTML
+    metrics = MetricsCollector()
 
     for model_entry in models:
         if isinstance(model_entry, Model):
@@ -66,7 +91,19 @@ def register_models(
         storages[schema.plural] = storage
         all_schemas.append(schema)
         expandable = find_expandable_fields(schema)
-        _create_flask_routes(blueprint, schema, storage, formatter, expandable, schema)
+
+        metrics.register_entity(
+            schema.name,
+            soft_delete=schema.soft_delete,
+            audit=schema.audit,
+            webhook=bool(webhook_urls),
+            rate_limited=bool(rate_limit),
+        )
+
+        _create_flask_routes(
+            blueprint, schema, storage, formatter, expandable, schema,
+            audit_log=audit_log, webhook=webhook, metrics=metrics,
+        )
 
     parent_to_children = resolve_relations(all_schemas)
     for parent_plural, relations in parent_to_children.items():
@@ -76,10 +113,55 @@ def register_models(
                 relation.foreign_key, storages.get(relation.target_plural, storage), formatter,
             )
 
+    # Dashboard
+    _add_dashboard_routes(blueprint, metrics, webhook)
+
+    # Rate limit middleware
+    if rate_limiter:
+        _add_rate_limit_middleware(app, rate_limiter)
+
     if docs:
         _add_docs_routes(blueprint, all_schemas, custom_routes or [], flask_app=app)
 
     app.register_blueprint(blueprint)
+
+
+def _add_rate_limit_middleware(app, rate_limiter) -> None:
+    from flask import request, jsonify
+
+    @app.before_request
+    def _check_rate_limit():
+        client_ip = request.remote_addr or "unknown"
+        allowed, remaining, reset = rate_limiter.check(client_ip)
+        if not allowed:
+            response = jsonify({"error": "Rate limit exceeded", "status": 429, "retryAfter": reset})
+            response.status_code = 429
+            response.headers["X-RateLimit-Limit"] = str(rate_limiter.limit)
+            response.headers["X-RateLimit-Remaining"] = "0"
+            response.headers["X-RateLimit-Reset"] = str(reset)
+            return response
+
+    @app.after_request
+    def _add_rate_limit_headers(response):
+        client_ip = request.remote_addr or "unknown"
+        allowed, remaining, reset = rate_limiter.check(client_ip)
+        response.headers["X-RateLimit-Limit"] = str(rate_limiter.limit)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(reset)
+        return response
+
+
+def _add_dashboard_routes(blueprint, metrics, webhook) -> None:
+    from flask import jsonify, Response
+    from flashapi.features.dashboard import DASHBOARD_HTML
+
+    @blueprint.route("/dashboard", methods=["GET"], endpoint="flashapi_dashboard")
+    def dashboard_html():
+        return Response(DASHBOARD_HTML, content_type="text/html")
+
+    @blueprint.route("/dashboard/metrics.json", methods=["GET"], endpoint="flashapi_dashboard_metrics")
+    def dashboard_metrics():
+        return jsonify(metrics.get_metrics(webhook))
 
 
 def _add_docs_routes(blueprint, schemas: list[ModelSchema], custom_routes: list[CustomRoute], flask_app=None) -> None:
@@ -165,6 +247,10 @@ def _create_flask_routes(
     formatter: Callable | None,
     expandable: dict,
     model_schema: ModelSchema,
+    *,
+    audit_log=None,
+    webhook=None,
+    metrics=None,
 ) -> None:
     from flask import request, jsonify
 
@@ -173,12 +259,15 @@ def _create_flask_routes(
     input_fields = writable_fields(model_schema)
     lookup_field = schema.lookup_field
     supports_soft_delete = schema.soft_delete
+    entity_audit = schema.audit
+    entity_name = schema.name
 
     id_converter = "int" if lookup_field == "id" else "string"
 
     if "list" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["GET"], endpoint=f"{table}_list")
-        def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema):
+        def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema,
+                       _metrics=metrics):
             deleted_param = request.args.get("deleted", "false").lower() == "true"
             include_deleted = deleted_param and supports_soft_delete
             items = storage.list_all(_table, include_deleted=include_deleted)
@@ -193,6 +282,8 @@ def _create_flask_routes(
             expand = params.get("expand")
 
             items = apply_filters(items, params, _fields)
+            if search and _metrics:
+                _metrics.record("SEARCH", entity_name)
             items = apply_search(items, search, _fields)
             items = apply_sorting(items, sort, _fields)
             page_items, total = paginate(items, page, size)
@@ -200,6 +291,8 @@ def _create_flask_routes(
             if expand:
                 page_items = _expand_items(page_items, expand, _exp, storage)
 
+            if _metrics:
+                _metrics.record("READ", entity_name)
             page_items = [filter_response(item, _schema) for item in page_items]
             return jsonify(create_list_response(page_items, total, page, size, formatter))
 
@@ -217,36 +310,66 @@ def _create_flask_routes(
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter))
 
+    if "read" in schema.permissions and entity_audit:
+        @blueprint.route(f"/{table}/<{id_converter}:item_id>/history", methods=["GET"], endpoint=f"{table}_history")
+        def history_item(item_id, _table=table, _entity=entity_name, _audit=audit_log):
+            if _audit is None:
+                return jsonify(create_error_response("Audit not enabled", 404)), 404
+            history = _audit.get_history(_entity, str(item_id))
+            return jsonify({"data": history})
+
     if "create" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["POST"], endpoint=f"{table}_create")
-        def create_item(_table=table, _input=input_fields, _schema=model_schema):
+        def create_item(_table=table, _input=input_fields, _schema=model_schema,
+                        _audit=audit_log, _webhook=webhook, _metrics=metrics):
             body = request.get_json(silent=True)
             if not body:
                 return jsonify(create_error_response("Request body is required", 400)), 400
             data = {k: v for k, v in body.items() if k in _input}
             item = storage.create(_table, data)
+            if _metrics:
+                _metrics.record("CREATE", entity_name, str(item.get("id", "")))
+            if _audit and entity_audit:
+                _audit.record("CREATE", entity_name, item.get("id", ""))
+            if _webhook:
+                _webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter)), 201
 
     if "update" in schema.permissions:
         @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["PUT"], endpoint=f"{table}_update")
-        def update_item(item_id, _table=table, _input=input_fields, _schema=model_schema, _lf=lookup_field):
+        def update_item(item_id, _table=table, _input=input_fields, _schema=model_schema,
+                        _lf=lookup_field, _audit=audit_log, _webhook=webhook, _metrics=metrics):
             body = request.get_json(silent=True)
             if not body:
                 return jsonify(create_error_response("Request body is required", 400)), 400
+            old_item = storage.get(_table, item_id, lookup_field=_lf)
             data = {k: v for k, v in body.items() if k in _input}
             item = storage.update(_table, item_id, data, lookup_field=_lf)
             if item is None:
                 return jsonify(create_error_response("Not found", 404)), 404
+            if _metrics:
+                _metrics.record("UPDATE", entity_name, str(item_id))
+            if _audit and entity_audit:
+                _audit.record("UPDATE", entity_name, item_id, old_data=old_item, new_data=item)
+            if _webhook:
+                _webhook.dispatch("UPDATE", entity_name, item_id, item)
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter))
 
     if "delete" in schema.permissions:
         @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["DELETE"], endpoint=f"{table}_delete")
-        def delete_item(item_id, _table=table, _lf=lookup_field):
+        def delete_item(item_id, _table=table, _lf=lookup_field, _audit=audit_log,
+                        _webhook=webhook, _metrics=metrics):
             deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
             if not deleted:
                 return jsonify(create_error_response("Not found", 404)), 404
+            if _metrics:
+                _metrics.record("DELETE", entity_name, str(item_id))
+            if _audit and entity_audit:
+                _audit.record("DELETE", entity_name, item_id)
+            if _webhook:
+                _webhook.dispatch("DELETE", entity_name, item_id, {})
             return "", 204
 
         if supports_soft_delete:

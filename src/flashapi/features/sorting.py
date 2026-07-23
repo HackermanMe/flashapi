@@ -8,12 +8,14 @@ def apply_sorting(
     sort: str | None,
     valid_fields: set[str],
 ) -> list[dict[str, Any]]:
-    """Sort items by field. Prefix with - for descending."""
+    """Sort items by field. Format: 'field,asc' or 'field,desc'."""
     if not sort:
         return items
 
-    descending = sort.startswith("-")
-    field_name = sort.lstrip("-")
+    parts = sort.split(",", 1)
+    field_name = parts[0].strip()
+    direction = parts[1].strip().lower() if len(parts) > 1 else "asc"
+    descending = direction == "desc"
 
     if field_name not in valid_fields:
         return items

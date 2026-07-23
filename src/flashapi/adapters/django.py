@@ -34,6 +34,33 @@ def generate_urls(
     urlpatterns = []
     all_schemas: list[ModelSchema] = []
 
+    # Webhooks
+    webhook = None
+    if webhook_urls:
+        from flashapi.features.webhooks import WebhookDispatcher
+        webhook = WebhookDispatcher(webhook_urls)
+
+    # Rate limiting
+    rate_limiter = None
+    if rate_limit:
+        from flashapi.features.rate_limit import RateLimiter
+        rate_limiter = RateLimiter(limit=rate_limit, window=rate_window)
+
+    # Metrics
+    from flashapi.features.dashboard import MetricsCollector
+    metrics = MetricsCollector()
+
+    # Audit (in-memory SQLite for Django adapter)
+    audit_log = None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        from flashapi.features.audit import AuditLog
+        audit_log = AuditLog(conn)
+    except Exception:
+        pass
+
     for model_entry in models:
         if isinstance(model_entry, Model):
             wrapper = model_entry
@@ -47,8 +74,27 @@ def generate_urls(
         schema.lookup_field = wrapper.lookup_field
         storage = DjangoORMStorage(wrapper.model_class)
         all_schemas.append(schema)
-        patterns = _create_django_views(schema, storage, formatter)
+
+        metrics.register_entity(
+            schema.name,
+            soft_delete=schema.soft_delete,
+            audit=schema.audit,
+            webhook=bool(webhook_urls),
+            rate_limited=bool(rate_limit),
+        )
+
+        patterns = _create_django_views(
+            schema, storage, formatter,
+            audit_log=audit_log, webhook=webhook, metrics=metrics,
+        )
         urlpatterns.extend(patterns)
+
+    # Dashboard
+    urlpatterns.extend(_create_dashboard_views(metrics, webhook))
+
+    # Rate limiting middleware class (user must add to MIDDLEWARE)
+    if rate_limiter:
+        _register_rate_limit_middleware(rate_limiter)
 
     if docs:
         urlpatterns.extend(_create_docs_views(
@@ -56,6 +102,70 @@ def generate_urls(
         ))
 
     return urlpatterns
+
+
+def _register_rate_limit_middleware(rate_limiter):
+    """Store rate_limiter globally for FlashAPIRateLimitMiddleware to pick up."""
+    global _RATE_LIMITER
+    _RATE_LIMITER = rate_limiter
+
+
+_RATE_LIMITER = None
+
+
+class FlashAPIRateLimitMiddleware:
+    """Django middleware for rate limiting. Add 'flashapi.adapters.django.FlashAPIRateLimitMiddleware' to MIDDLEWARE."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from django.http import JsonResponse
+
+        if _RATE_LIMITER is None:
+            return self.get_response(request)
+
+        client_ip = self._get_client_ip(request)
+        allowed, remaining, reset = _RATE_LIMITER.check(client_ip)
+
+        if not allowed:
+            response = JsonResponse(
+                {"error": "Rate limit exceeded", "status": 429, "retryAfter": reset},
+                status=429,
+            )
+            response["X-RateLimit-Limit"] = str(_RATE_LIMITER.limit)
+            response["X-RateLimit-Remaining"] = "0"
+            response["X-RateLimit-Reset"] = str(reset)
+            return response
+
+        response = self.get_response(request)
+        response["X-RateLimit-Limit"] = str(_RATE_LIMITER.limit)
+        response["X-RateLimit-Remaining"] = str(remaining)
+        response["X-RateLimit-Reset"] = str(reset)
+        return response
+
+    def _get_client_ip(self, request):
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+        if x_forwarded_for:
+            return x_forwarded_for.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _create_dashboard_views(metrics, webhook):
+    from django.urls import path
+    from django.http import JsonResponse, HttpResponse
+    from flashapi.features.dashboard import DASHBOARD_HTML
+
+    def dashboard_html(request):
+        return HttpResponse(DASHBOARD_HTML, content_type="text/html")
+
+    def dashboard_metrics(request):
+        return JsonResponse(metrics.get_metrics(webhook))
+
+    return [
+        path("dashboard/", dashboard_html, name="flashapi_dashboard"),
+        path("dashboard/metrics.json", dashboard_metrics, name="flashapi_dashboard_metrics"),
+    ]
 
 
 def _create_docs_views(schemas: list[ModelSchema], custom_routes: list[CustomRoute], extra_views: list):
@@ -94,6 +204,10 @@ def _create_django_views(
     schema: ModelSchema,
     storage: DjangoORMStorage,
     formatter: Callable | None,
+    *,
+    audit_log=None,
+    webhook=None,
+    metrics=None,
 ):
     from django.urls import path
     from django.http import JsonResponse, HttpResponse
@@ -104,6 +218,9 @@ def _create_django_views(
     field_names = {f.name for f in schema.fields if not f.primary_key}
     input_fields = writable_fields(schema)
     lookup_field = schema.lookup_field
+    entity_name = schema.name
+    entity_audit = schema.audit
+    supports_soft_delete = schema.soft_delete
     patterns = []
 
     # --- List + Create ---
@@ -123,13 +240,17 @@ def _create_django_views(
                 search = params.get("search")
                 deleted_param = params.get("deleted", "false").lower() == "true"
 
-                include_deleted = deleted_param and _schema.soft_delete
+                include_deleted = deleted_param and supports_soft_delete
                 items = storage.list_all(_table, include_deleted=include_deleted)
                 items = apply_filters(items, params, _fields)
+                if search and metrics:
+                    metrics.record("SEARCH", entity_name)
                 items = apply_search(items, search, _fields)
                 items = apply_sorting(items, sort, _fields)
                 page_items, total = paginate(items, page, size)
                 page_items = [filter_response(item, _schema) for item in page_items]
+                if metrics:
+                    metrics.record("READ", entity_name)
                 return JsonResponse(
                     create_list_response(page_items, total, page, size, formatter)
                 )
@@ -141,6 +262,12 @@ def _create_django_views(
                     return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
                 data = {k: v for k, v in body.items() if k in _input}
                 item = storage.create(_table, data)
+                if metrics:
+                    metrics.record("CREATE", entity_name, str(item.get("id", "")))
+                if audit_log and entity_audit:
+                    audit_log.record("CREATE", entity_name, item.get("id", ""))
+                if webhook:
+                    webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter), status=201)
 
@@ -217,17 +344,30 @@ def _create_django_views(
                     body = json.loads(request.body)
                 except (json.JSONDecodeError, ValueError):
                     return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+                old_item = storage.get(_table, item_id, lookup_field=_lookup)
                 data = {k: v for k, v in body.items() if k in _input}
                 item = storage.update(_table, item_id, data, lookup_field=_lookup)
                 if item is None:
                     return JsonResponse(create_error_response("Not found", 404), status=404)
+                if metrics:
+                    metrics.record("UPDATE", entity_name, str(item_id))
+                if audit_log and entity_audit:
+                    audit_log.record("UPDATE", entity_name, item_id, old_data=old_item, new_data=item)
+                if webhook:
+                    webhook.dispatch("UPDATE", entity_name, item_id, item)
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter))
 
             elif request.method == "DELETE" and "delete" in _schema.permissions:
-                deleted = storage.delete(_table, item_id, soft=_schema.soft_delete, lookup_field=_lookup)
+                deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lookup)
                 if not deleted:
                     return JsonResponse(create_error_response("Not found", 404), status=404)
+                if metrics:
+                    metrics.record("DELETE", entity_name, str(item_id))
+                if audit_log and entity_audit:
+                    audit_log.record("DELETE", entity_name, item_id)
+                if webhook:
+                    webhook.dispatch("DELETE", entity_name, item_id, {})
                 return HttpResponse(status=204)
 
             return JsonResponse(create_error_response("Method not allowed", 405), status=405)
@@ -238,7 +378,7 @@ def _create_django_views(
             patterns.append(path(f"{table}/<str:item_id>/", csrf_exempt(detail_view), name=f"{table}_detail"))
 
     # --- Restore (only if soft_delete) ---
-    if "delete" in schema.permissions and schema.soft_delete:
+    if "delete" in schema.permissions and supports_soft_delete:
 
         def restore_view(request, item_id, _table=table, _lookup=lookup_field):
             if request.method != "POST":
@@ -254,12 +394,15 @@ def _create_django_views(
             patterns.append(path(f"{table}/<str:item_id>/restore/", csrf_exempt(restore_view), name=f"{table}_restore"))
 
     # --- History (only if audit) ---
-    if "read" in schema.permissions and schema.audit:
+    if "read" in schema.permissions and entity_audit:
 
-        def history_view(request, item_id, _table=table, _entity=schema.name):
+        def history_view(request, item_id, _table=table, _entity=entity_name, _audit=audit_log):
             if request.method != "GET":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
-            return JsonResponse({"data": []})
+            if _audit is None:
+                return JsonResponse(create_error_response("Audit not enabled", 404), status=404)
+            history = _audit.get_history(_entity, str(item_id))
+            return JsonResponse({"data": history}, safe=False)
 
         if lookup_field == "id":
             patterns.append(path(f"{table}/<int:item_id>/history/", history_view, name=f"{table}_history"))
