@@ -39,6 +39,7 @@ class AutoStorage(Storage):
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._soft_delete_tables: set[str] = set()
+        self._auto_fields: dict[str, list[tuple[str, str]]] = {}  # table -> [(field_name, auto_type)]
 
     def ensure_table(self, schema: ModelSchema, *, soft_delete: bool = True) -> None:
         table = _validate_identifier(schema.plural)
@@ -56,11 +57,30 @@ class AutoStorage(Storage):
             columns.append('"deleted_at" TEXT')
             self._soft_delete_tables.add(schema.plural)
 
+        auto_fields = [(f.name, f.auto) for f in schema.fields if f.auto]
+        if auto_fields:
+            self._auto_fields[schema.plural] = auto_fields
+
         sql = f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)})"
         self._conn.execute(sql)
         self._conn.commit()
 
+    def _generate_auto_value(self, auto_type: str) -> Any:
+        import uuid
+        if auto_type == "uuid":
+            return str(uuid.uuid4())
+        elif auto_type == "datetime":
+            return datetime.now(timezone.utc).isoformat()
+        elif auto_type == "date":
+            return datetime.now(timezone.utc).date().isoformat()
+        return None
+
     def create(self, table: str, data: dict[str, Any]) -> dict[str, Any]:
+        data = dict(data)
+        for field_name, auto_type in self._auto_fields.get(table, []):
+            if field_name not in data:
+                data[field_name] = self._generate_auto_value(auto_type)
+
         safe_table = _validate_identifier(table)
         columns = [_validate_identifier(k) for k in data.keys()]
         placeholders = ", ".join(["?"] * len(columns))

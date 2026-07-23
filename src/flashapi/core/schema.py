@@ -41,6 +41,7 @@ class FieldSchema:
     writeonly: bool = False
     hidden: bool = False
     export_exclude: bool = False
+    auto: str | None = None  # "uuid", "datetime", "date" — server-generated on create
 
 
 @dataclass

@@ -18,6 +18,7 @@ def writable_fields(schema: ModelSchema) -> set[str]:
     return {
         f.name for f in schema.fields
         if not f.hidden and not f.readonly and not f.primary_key
+        and not f.auto_generated and not f.auto
     }
 
 

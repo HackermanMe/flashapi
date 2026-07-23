@@ -186,7 +186,7 @@ Case-insensitive partial match across all string/text fields.
 
 ## Soft Delete & Restore
 
-DELETE performs a soft delete. Items are hidden by default but can be viewed and restored.
+DELETE performs a soft delete by default. Items are hidden from list queries but can be viewed and restored.
 
 ```bash
 # Soft delete
@@ -198,6 +198,34 @@ GET /api/products?deleted=true
 # Restore
 POST /api/products/1/restore   → 204
 ```
+
+### Configuration
+
+```python
+from flashapi import Model
+
+# Per-entity
+Model(Product, soft_delete=True)      # Default: soft delete
+Model(LogEntry, soft_delete=False)    # Hard delete (permanent, no restore)
+```
+
+### Behavior
+
+| `soft_delete` | DELETE action | Restore available | `?deleted=true` |
+|---|---|---|---|
+| `True` (default) | Marks as deleted, hidden from list | Yes | Shows deleted items |
+| `False` | Permanent removal from database | No | No effect |
+
+### Cascade and soft delete
+
+FlashAPI soft-deletes **only the targeted entity**. It does NOT cascade to related entities.
+
+- Soft-deleting a `Category` does NOT soft-delete its `Products`
+- If you need cascade soft-delete, implement it in custom logic (signals, hooks, custom service)
+- For Django: `on_delete=CASCADE` only triggers on hard deletes (real SQL DELETE), not on soft deletes
+- For SQLAlchemy: same — cascade rules only apply to actual deletions
+
+This is by design: cascade soft-delete is business logic that varies per application.
 
 ---
 
@@ -509,6 +537,92 @@ class User:
 | `writeonly=True` | No | Yes | No |
 | `hidden=True` | No | No | No |
 | `export_exclude=True` | Yes | Yes | No |
+| `auto="uuid"` | Yes | No (auto-generated) | Yes |
+| `auto="datetime"` | Yes | No (auto-generated) | Yes |
+
+---
+
+## Auto-Generated Fields
+
+Fields that are generated server-side on create (UUID tracking IDs, timestamps). They are:
+- **Excluded** from the request body (POST/PUT)
+- **Excluded** from Swagger/OpenAPI schemas
+- **Present** in the response with their auto-generated value
+
+### Pydantic
+
+```python
+from pydantic import BaseModel, Field
+
+class Campagne(BaseModel):
+    tracking_id: str = Field(default="", json_schema_extra={"flash": {"auto": "uuid"}})
+    label: str
+    date_debut: str
+    date_fin: str
+    created_at: str = Field(default="", json_schema_extra={"flash": {"auto": "datetime"}})
+```
+
+POST `/api/campagnes` body — only writable fields:
+```json
+{"label": "Summer Sale", "date_debut": "2026-06-01", "date_fin": "2026-08-31"}
+```
+
+Response — includes auto-generated fields:
+```json
+{
+  "data": {
+    "id": 1,
+    "tracking_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "label": "Summer Sale",
+    "date_debut": "2026-06-01",
+    "date_fin": "2026-08-31",
+    "created_at": "2026-07-23T10:00:00+00:00"
+  }
+}
+```
+
+Bulk create works the same — each item gets its own unique generated values.
+
+### SQLAlchemy
+
+Auto-detection: any column with a `default=callable` is automatically excluded from inputs:
+
+```python
+import uuid
+from sqlalchemy import Column, String, DateTime
+from sqlalchemy.sql import func
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    tracking_id = Column(String, default=lambda: str(uuid.uuid4()), unique=True)
+    created_at = Column(DateTime, default=func.now())
+    label = Column(String, nullable=False)
+```
+
+No annotation needed — FlashAPI detects the callable default and handles it.
+
+### Django
+
+Auto-detection: `auto_now_add`, `auto_now`, and `default=callable` are automatically excluded:
+
+```python
+import uuid
+from django.db import models
+
+class Order(models.Model):
+    tracking_id = models.UUIDField(default=uuid.uuid4, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    label = models.CharField(max_length=200)
+```
+
+### Supported auto types (Pydantic)
+
+| Value | Generated value |
+|-------|----------------|
+| `"uuid"` | `uuid.uuid4()` as string |
+| `"datetime"` | Current UTC datetime (ISO 8601) |
+| `"date"` | Current UTC date (ISO 8601) |
 
 ---
 

@@ -47,12 +47,13 @@ class SQLAlchemyInspector(Inspector):
                 relation = RelationSchema(type="many_to_one", target=target_table)
 
             has_default = col.default is not None or col.server_default is not None
+            has_callable_default = col.default is not None and callable(getattr(col.default, "arg", None))
             is_auto_int = (
                 col.primary_key
                 and col.autoincrement is not False
                 and field_type == FieldType.INTEGER
             )
-            auto_generated = is_auto_int or (col.primary_key and has_default)
+            auto_generated = is_auto_int or (col.primary_key and has_default) or has_callable_default
 
             default_value = None
             if col.default and not callable(getattr(col.default, "arg", None)):

@@ -50,6 +50,10 @@ def _build_pydantic_model(schema: ModelSchema, *, all_optional: bool = False) ->
     for f in schema.fields:
         if f.primary_key and f.auto_generated:
             continue
+        if f.auto_generated or f.auto:
+            continue
+        if f.hidden or f.readonly:
+            continue
         python_type = FIELD_TYPE_TO_PYTHON.get(f.type, str)
         if f.required and not all_optional:
             fields[f.name] = (python_type, ...)

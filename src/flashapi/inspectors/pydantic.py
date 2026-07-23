@@ -92,4 +92,7 @@ class PydanticInspector(Inspector):
         for key in ("readonly", "writeonly", "hidden", "export_exclude"):
             if flash.get(key):
                 visibility[key] = True
+        if flash.get("auto"):
+            visibility["auto"] = flash["auto"]
+            visibility["auto_generated"] = True
         return visibility

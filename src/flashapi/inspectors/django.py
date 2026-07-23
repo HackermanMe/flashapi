@@ -59,7 +59,12 @@ class DjangoInspector(Inspector):
             is_pk = getattr(f, "primary_key", False)
             auto_generated = field_type_name in ("AutoField", "BigAutoField", "SmallAutoField")
             has_default = hasattr(f, "default") and f.default is not None
+            has_callable_default = has_default and callable(f.default)
+            auto_now_add = getattr(f, "has_default", lambda: False)() if hasattr(f, "auto_now_add") and f.auto_now_add else False
+            auto_now = getattr(f, "auto_now", False)
             if is_pk and has_default and not auto_generated:
+                auto_generated = True
+            if has_callable_default or auto_now_add or auto_now:
                 auto_generated = True
             required = not getattr(f, "blank", False) and not getattr(f, "null", False) and not has_default
             default = f.default if has_default else None
