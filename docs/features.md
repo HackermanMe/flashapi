@@ -162,14 +162,13 @@ Multiple filters = AND logic.
 
 ## Sorting
 
-Sort by field name. Use `field,asc` or `field,desc`:
+Sort by field name. Format: `field,asc` or `field,desc`:
 
 ```
 GET /api/products?sort=name,asc
 GET /api/products?sort=price,desc
+GET /api/products?sort=name        ← defaults to ascending
 ```
-
-Or simply `?sort=name` for ascending, `?sort=-name` for descending.
 
 ---
 
@@ -271,23 +270,85 @@ Response:
 }
 ```
 
-Enable/disable:
+### Configuration
+
+Audit can be toggled globally or per-entity:
+
+**FastAPI:**
 ```python
-FlashAPI(models=[Product], audit=True)   # default
-FlashAPI(models=[Product], audit=False)  # disable
+# Globally disable audit
+FlashAPI(models=[Product], audit=False)
+
+# Per-entity: disable audit only for LogEntry
+from flashapi import Model
+FlashAPI(models=[
+    Product,                          # audit enabled (default)
+    Model(LogEntry, audit=False),     # no history, no audit recording
+])
+```
+
+**Flask:**
+```python
+from flashapi import Model
+from flashapi.flask import register_models
+
+register_models(app, models=[
+    Product,                          # audit enabled (default)
+    Model(LogEntry, audit=False),     # no history for this entity
+], engine=db.engine)
+```
+
+**Django:**
+```python
+from flashapi import Model
+from flashapi.django import generate_urls
+
+urlpatterns = [
+    path("api/", include(generate_urls(models=[
+        Product,                          # audit enabled (default)
+        Model(LogEntry, audit=False),     # no history for this entity
+    ]))),
+]
 ```
 
 ---
 
 ## Webhooks
 
-Send HTTP POST notifications to external URLs on every CRUD event:
+Send HTTP POST notifications to external URLs on every CRUD event.
 
+### Configuration
+
+**FastAPI:**
 ```python
-FlashAPI(models=[Product], webhook_urls=["http://localhost:9090/webhooks"])
+app = FlashAPI(
+    models=[Product],
+    webhook_urls=["https://hooks.example.com/flashapi"],
+).app
 ```
 
-Webhook payload:
+**Flask:**
+```python
+register_models(
+    app,
+    models=[Product],
+    engine=db.engine,
+    webhook_urls=["https://hooks.example.com/flashapi"],
+)
+```
+
+**Django:**
+```python
+urlpatterns = [
+    path("api/", include(generate_urls(
+        models=[Product],
+        webhook_urls=["https://hooks.example.com/flashapi"],
+    ))),
+]
+```
+
+### Payload
+
 ```json
 {
   "event": "CREATE",
@@ -298,52 +359,108 @@ Webhook payload:
 }
 ```
 
-Headers:
-- `X-FlashAPI-Event`: CREATE, UPDATE, or DELETE
-- `X-FlashAPI-Entity`: Entity name
+### Headers
 
-Features:
-- Asynchronous delivery (does not block the API response)
-- Exponential backoff retry (3 attempts)
+| Header | Example |
+|--------|---------|
+| `X-FlashAPI-Event` | `CREATE`, `UPDATE`, `DELETE` |
+| `X-FlashAPI-Entity` | `Product` |
+
+### Behavior
+
+- Asynchronous delivery (non-blocking)
+- Exponential backoff retry (3 attempts: 1s, 2s, 4s)
+- Multiple URLs supported (all receive every event)
 
 ---
 
 ## Rate Limiting
 
-Limit requests per IP with a sliding window:
+Limit requests per IP with a sliding window.
 
+### Configuration
+
+**FastAPI:**
 ```python
-FlashAPI(models=[Product], rate_limit=100, rate_window=60)  # 100 req/min
+app = FlashAPI(
+    models=[Product],
+    rate_limit=100,       # 100 requests max
+    rate_window=60,       # per 60 seconds
+).app
 ```
 
-Every response includes headers:
+**Flask:**
+```python
+register_models(
+    app,
+    models=[Product],
+    engine=db.engine,
+    rate_limit=100,
+    rate_window=60,
+)
+```
+
+**Django:**
+
+```python
+# urls.py
+urlpatterns = [
+    path("api/", include(generate_urls(
+        models=[Product],
+        rate_limit=100,
+        rate_window=60,
+    ))),
+]
+```
+
+```python
+# settings.py — add the middleware
+MIDDLEWARE = [
+    "flashapi.adapters.django.FlashAPIRateLimitMiddleware",
+    # ... other middleware
+]
+```
+
+### Response headers (every response)
+
 ```
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 95
 X-RateLimit-Reset: 45
 ```
 
-When exceeded (429):
+### When exceeded (429)
+
 ```json
 {"error": "Rate limit exceeded", "status": 429, "retryAfter": 45}
 ```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `rate_limit` | `None` (disabled) | Max requests per window |
+| `rate_window` | `60` | Window duration in seconds |
 
 ---
 
 ## Dashboard
 
-A live HTML dashboard + JSON metrics endpoint:
+A live HTML dashboard + JSON metrics endpoint. Auto-enabled for all frameworks.
 
-```
-GET /api/dashboard           → HTML (auto-refresh 5s)
-GET /api/dashboard/metrics.json  → JSON metrics
-```
+### Endpoints
 
-Auto-discovers all registered entities and shows:
+| Framework | HTML Dashboard | JSON Metrics |
+|-----------|---------------|--------------|
+| FastAPI | `GET /api/dashboard` | `GET /api/dashboard/metrics.json` |
+| Flask | `GET /api/dashboard` | `GET /api/dashboard/metrics.json` |
+| Django | `GET /api/dashboard/` | `GET /api/dashboard/metrics.json` |
+
+### Features
+
+- Auto-refresh every 5 seconds
 - Operations per entity (CREATE, READ, UPDATE, DELETE counts)
-- Total operations
 - Webhook health (sent/failed/retries)
 - Recent events feed
+- Per-entity feature flags (soft delete, audit, webhook, rate limit)
 
 ---
 

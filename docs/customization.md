@@ -310,19 +310,38 @@ FlashAPI(models=[
 | `audit=True` | `True` | No `/history` endpoint, no audit log |
 | `lookup_field="id"` | `"id"` | URLs use the specified field instead of PK |
 
-### Global (via constructor)
+### Global (via constructor / function)
 
+These options are available on all three frameworks:
+
+**FastAPI:**
 ```python
 FlashAPI(
     models=[Product, Order],
-    base_path="/api",           # URL prefix (default: "/api")
-    database="app.db",         # SQLite path (Pydantic/dataclass only)
-    formatter=None,            # Custom response formatter
-    webhook_urls=[],           # Webhook target URLs (default: [])
-    rate_limit=None,           # Requests per window (default: None = disabled)
-    rate_window=60,            # Window in seconds (default: 60)
-    docs=True,                 # Enable interactive docs (default: True)
+    webhook_urls=["https://hooks.example.com/api"],
+    rate_limit=100,
+    rate_window=60,
 )
+```
+
+**Flask:**
+```python
+register_models(app, models=[Product, Order],
+    engine=db.engine,
+    webhook_urls=["https://hooks.example.com/api"],
+    rate_limit=100,
+    rate_window=60,
+)
+```
+
+**Django:**
+```python
+generate_urls(models=[Product, Order],
+    webhook_urls=["https://hooks.example.com/api"],
+    rate_limit=100,
+    rate_window=60,
+)
+# + add FlashAPIRateLimitMiddleware to MIDDLEWARE in settings.py
 ```
 
 | Feature | Enabled by | Disabled by |

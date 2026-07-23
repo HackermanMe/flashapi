@@ -224,6 +224,7 @@ class Emprunt(db.Model):
 ```python
 from flask import Flask
 from flashapi.flask import register_models
+from flashapi import Model
 from models import db, Auteur, Categorie, Livre, Adherent, Emprunt
 
 
@@ -239,10 +240,17 @@ def create_app():
         # 2. Create tables
         db.create_all()
 
-        # 3. Register FlashAPI with engine=db.engine
+        # 3. Register FlashAPI with all features
         register_models(app, models=[
-            Auteur, Categorie, Livre, Adherent, Emprunt
-        ], engine=db.engine)    # ← THIS IS THE KEY PARAMETER
+            Model(Auteur, soft_delete=True, audit=True),
+            Model(Categorie, soft_delete=False, audit=False),
+            Livre, Adherent, Emprunt,
+        ],
+            engine=db.engine,
+            webhook_urls=["https://hooks.example.com/library"],
+            rate_limit=200,
+            rate_window=60,
+        )
 
     return app
 
@@ -251,6 +259,15 @@ if __name__ == '__main__':
     app = create_app()
     app.run(debug=True, port=5000)
 ```
+
+This gives you:
+- Full CRUD + pagination + filtering + sorting + search
+- Soft delete & restore (except Categorie)
+- Audit trail with `/history` endpoint (except Categorie)
+- Webhooks on every CREATE/UPDATE/DELETE
+- Rate limiting (200 req/min per IP)
+- Dashboard at `/api/dashboard`
+- Export at `/api/{entity}/export?format=csv`
 
 **Run:**
 ```bash
@@ -326,7 +343,7 @@ my_project/
     └── models.py    ← Your Django models (no changes needed)
 ```
 
-### `urls.py`
+### `urls.py` — minimal
 
 ```python
 from django.contrib import admin
@@ -341,6 +358,49 @@ urlpatterns = [
     ))),
 ]
 ```
+
+### `urls.py` — all features enabled
+
+```python
+from django.contrib import admin
+from django.urls import path, include
+from flashapi.django import generate_urls
+from flashapi import Model
+from backend.models import Eleve, Enseignant, Classe, Note, Matiere
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("api/", include(generate_urls(
+        models=[
+            Model(Eleve, soft_delete=True, audit=True),
+            Model(Enseignant, soft_delete=True, audit=True),
+            Model(Classe, soft_delete=False, audit=False),
+            Note, Matiere,
+        ],
+        webhook_urls=["https://hooks.example.com/school"],
+        rate_limit=150,
+        rate_window=60,
+    ))),
+]
+```
+
+```python
+# settings.py — add rate limiting middleware
+MIDDLEWARE = [
+    "flashapi.adapters.django.FlashAPIRateLimitMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    # ...
+]
+```
+
+This gives you:
+- Full CRUD + pagination + filtering + sorting + search
+- Soft delete & restore (except Classe)
+- Audit trail with `/history/` endpoint (except Classe)
+- Webhooks on every CREATE/UPDATE/DELETE
+- Rate limiting (150 req/min per IP)
+- Dashboard at `/api/dashboard/`
+- Export at `/api/{entity}/export/?format=csv`
 
 **Run:**
 ```bash
@@ -470,6 +530,9 @@ register_models(
     database="flashapi.db",   # For Pydantic/dataclass models only: SQLite file path.
     docs=True,                # Enable /docs and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
+    webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
+    rate_limit=100,           # Requests per window. Default: None (disabled).
+    rate_window=60,           # Window in seconds. Default: 60.
 )
 ```
 
@@ -482,10 +545,15 @@ generate_urls(
     base_path="/api",         # URL prefix. Default: "/api".
     docs=True,                # Enable /docs/ and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
+    webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
+    rate_limit=100,           # Requests per window. Default: None (disabled).
+    rate_window=60,           # Window in seconds. Default: 60.
 )
 ```
 
 No `engine=` for Django — it always uses the Django ORM.
+
+> **Django rate limiting:** Add `"flashapi.adapters.django.FlashAPIRateLimitMiddleware"` to your `MIDDLEWARE` in `settings.py` for rate limiting to take effect.
 
 ### Per-entity options — `Model()`
 
