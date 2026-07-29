@@ -101,11 +101,21 @@ def _build_model_schema(schema: ModelSchema, *, exclude_auto: bool = False) -> d
     return result
 
 
+def _resolve_lookup_type(schema: ModelSchema) -> dict:
+    """Get the OpenAPI type for the lookup field (item_id parameter)."""
+    lf = schema.lookup_field or "id"
+    for field in schema.fields:
+        if field.name == lf or (field.primary_key and lf == "id"):
+            return dict(FIELD_TYPE_TO_OPENAPI.get(field.type, {"type": "string"}))
+    return {"type": "string"}
+
+
 def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     paths = {}
     table = schema.plural
     tag = schema.name
     suffix = "/" if trailing_slash else ""
+    lookup_schema = _resolve_lookup_type(schema)
 
     collection_ops = {}
     detail_ops = {}
@@ -160,7 +170,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"Get a {schema.name.lower()} by ID",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}},
+                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema},
                 {"name": "expand", "in": "query", "schema": {"type": "string"}},
             ],
             "responses": {
@@ -180,7 +190,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"Update a {schema.name.lower()}",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
             ],
             "requestBody": {
                 "required": True,
@@ -203,7 +213,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"{'Soft delete' if schema.soft_delete else 'Delete'} a {schema.name.lower()}",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
             ],
             "responses": {
                 "204": {"description": "Deleted"},
@@ -222,7 +232,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                 "tags": [tag],
                 "summary": f"Restore soft-deleted {schema.name.lower()}",
                 "parameters": [
-                    {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
                 ],
                 "responses": {
                     "204": {"description": "Restored"},
@@ -272,7 +282,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                 "tags": [tag],
                 "summary": f"Audit history for {schema.name.lower()}",
                 "parameters": [
-                    {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
                 ],
                 "responses": {
                     "200": {"description": "Audit history"}
