@@ -346,9 +346,27 @@ GET /api/products/export?format=xlsx
 GET /api/products/export?format=pdf
 ```
 
+### Sélectionner les champs
+
+Le paramètre `fields` permet de choisir quels champs exporter (séparés par des virgules) :
+
+```
+GET /api/enseignants/export?format=xlsx&fields=nom,prenom,email,telephone
+```
+
+Si `fields` est omis, tous les champs exportables sont inclus. Si aucun des champs demandés n'est valide, une erreur 400 est retournée avec la liste des champs disponibles.
+
+### Formats
+
+| Format | Content-Type | Dépendance | Notes |
+|--------|-------------|------------|-------|
+| `csv` | `text/csv` | Aucune | UTF-8 BOM + séparateur `;` (compatible Excel) |
+| `xlsx` | `application/vnd.openxmlformats...` | `pip install openpyxl` | Auto-width, header stylé, filtre auto |
+| `pdf` | `application/pdf` | `pip install reportlab` | Paysage, tableau paginé, lignes alternées |
+
 Returns binary file with `Content-Disposition: attachment` header.
 
-XLSX requires `openpyxl`. PDF requires `reportlab`.
+Si la dépendance n'est pas installée, FlashAPI retourne une **400** avec le message d'installation (pas une 500).
 
 ---
 

@@ -534,7 +534,7 @@ class FlashAPI:
         bp = self._base_path
 
         @self._app.get(f"{bp}/{table}/export", tags=[tag], name=f"{table}_export")
-        async def route(request: Request, format: str = Query("csv")):
+        async def route(request: Request, format: str = Query("csv"), fields: str = Query("")):
             user, role, err = self._check_auth(request, "list", model_schema)
             if err:
                 return err
@@ -551,9 +551,18 @@ class FlashAPI:
             if scope_filter:
                 items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
 
-            fields = sorted(export_fields(model_schema))
+            all_fields = sorted(export_fields(model_schema))
+            if fields:
+                export_cols = [f for f in fields.split(",") if f in all_fields]
+                if not export_cols:
+                    return JSONResponse(
+                        status_code=400,
+                        content=create_error_response(f"No valid fields. Available: {', '.join(all_fields)}", 400),
+                    )
+            else:
+                export_cols = all_fields
             try:
-                content = EXPORTERS[fmt](items, fields)
+                content = EXPORTERS[fmt](items, export_cols)
             except ImportError as e:
                 return JSONResponse(
                     content=create_error_response(str(e), 400), status_code=400

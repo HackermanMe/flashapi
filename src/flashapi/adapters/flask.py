@@ -555,7 +555,14 @@ def _create_flask_routes(
             if scope_filter:
                 items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
 
-            fields = sorted(export_fields(_schema))
+            all_fields = sorted(export_fields(_schema))
+            requested = request.args.get("fields", "")
+            if requested:
+                fields = [f for f in requested.split(",") if f in all_fields]
+                if not fields:
+                    return jsonify(create_error_response(f"No valid fields. Available: {', '.join(all_fields)}", 400)), 400
+            else:
+                fields = all_fields
             try:
                 content = EXPORTERS[fmt](items, fields)
             except ImportError as e:
