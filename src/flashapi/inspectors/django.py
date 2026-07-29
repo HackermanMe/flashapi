@@ -33,6 +33,8 @@ DJANGO_TYPE_MAP = {
 
 class DjangoInspector(Inspector):
     def inspect(self, model_class: type, plural: str | None = None) -> ModelSchema:
+        from django.db.models.fields import NOT_PROVIDED
+
         meta = model_class._meta
         fields: list[FieldSchema] = []
 
@@ -54,20 +56,23 @@ class DjangoInspector(Inspector):
                     type="one_to_one" if f.one_to_one else "many_to_one",
                     target=f.related_model.__name__,
                 )
-                field_type = FieldType.INTEGER
+                target_pk = f.related_model._meta.pk
+                target_type_name = type(target_pk).__name__
+                field_type = DJANGO_TYPE_MAP.get(target_type_name, FieldType.INTEGER)
 
             is_pk = getattr(f, "primary_key", False)
             auto_generated = field_type_name in ("AutoField", "BigAutoField", "SmallAutoField")
-            has_default = hasattr(f, "default") and f.default is not None
-            has_callable_default = has_default and callable(f.default)
-            auto_now_add = getattr(f, "has_default", lambda: False)() if hasattr(f, "auto_now_add") and f.auto_now_add else False
+            raw_default = getattr(f, "default", NOT_PROVIDED)
+            has_real_default = raw_default is not NOT_PROVIDED and raw_default is not None
+            has_callable_default = has_real_default and callable(raw_default)
+            auto_now_add = getattr(f, "auto_now_add", False)
             auto_now = getattr(f, "auto_now", False)
-            if is_pk and has_default and not auto_generated:
+            if is_pk and has_real_default and not auto_generated:
                 auto_generated = True
             if has_callable_default or auto_now_add or auto_now:
                 auto_generated = True
-            required = not getattr(f, "blank", False) and not getattr(f, "null", False) and not has_default
-            default = f.default if has_default else None
+            required = not getattr(f, "blank", False) and not getattr(f, "null", False) and not has_real_default
+            default = raw_default if has_real_default else None
 
             field_name = getattr(f, "attname", f.name) if is_fk else f.name
 

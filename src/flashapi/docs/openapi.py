@@ -57,7 +57,7 @@ def generate_openapi_schema(
 
     for schema in schemas:
         components_schemas[schema.name] = _build_model_schema(schema)
-        components_schemas[f"{schema.name}Create"] = _build_model_schema(schema, exclude_auto_pk=True)
+        components_schemas[f"{schema.name}Create"] = _build_model_schema(schema, exclude_auto=True)
         model_paths = _build_paths(schema, trailing_slash=trailing_slash)
         paths.update(model_paths)
 
@@ -75,12 +75,12 @@ def generate_openapi_schema(
     }
 
 
-def _build_model_schema(schema: ModelSchema, *, exclude_auto_pk: bool = False) -> dict:
+def _build_model_schema(schema: ModelSchema, *, exclude_auto: bool = False) -> dict:
     properties = {}
     required = []
 
     for field in schema.fields:
-        if exclude_auto_pk and field.primary_key and field.auto_generated:
+        if exclude_auto and field.auto_generated:
             continue
         prop = dict(FIELD_TYPE_TO_OPENAPI.get(field.type, {"type": "string"}))
         if field.constraints.get("max_length"):
@@ -201,7 +201,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     if "delete" in schema.permissions:
         detail_ops["delete"] = {
             "tags": [tag],
-            "summary": f"Soft delete a {schema.name.lower()}",
+            "summary": f"{'Soft delete' if schema.soft_delete else 'Delete'} a {schema.name.lower()}",
             "parameters": [
                 {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
             ],
@@ -216,7 +216,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
     if detail_ops:
         paths[f"/{table}/{{item_id}}{suffix}"] = detail_ops
 
-    if "delete" in schema.permissions:
+    if "delete" in schema.permissions and schema.soft_delete:
         paths[f"/{table}/{{item_id}}/restore{suffix}"] = {
             "post": {
                 "tags": [tag],
@@ -266,7 +266,7 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             }
         }
 
-    if "read" in schema.permissions:
+    if "read" in schema.permissions and schema.audit:
         paths[f"/{table}/{{item_id}}/history{suffix}"] = {
             "get": {
                 "tags": [tag],

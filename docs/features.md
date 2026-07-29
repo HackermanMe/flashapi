@@ -6,6 +6,7 @@
 
 ## Table of Contents
 
+- [API Root](#api-root)
 - [Automatic CRUD](#automatic-crud)
 - [Pagination](#pagination)
 - [Filtering](#filtering)
@@ -19,8 +20,39 @@
 - [Rate Limiting](#rate-limiting)
 - [Dashboard](#dashboard)
 - [Field Visibility](#field-visibility)
+- [Relation Type Inference](#relation-type-inference)
 - [Combining Parameters](#combining-parameters)
 - [Interactive Documentation](#interactive-documentation)
+
+---
+
+## API Root
+
+FlashAPI generates a JSON index at the base path (`/api/` by default) listing all registered resources with their URLs:
+
+```bash
+curl http://localhost:8000/api/
+```
+
+Response (200):
+```json
+{
+  "name": "FlashAPI",
+  "version": "0.1.0",
+  "resources": {
+    "products": "/api/products",
+    "orders": "/api/orders",
+    "categories": "/api/categories"
+  },
+  "links": {
+    "docs": "/api/docs",
+    "openapi": "/api/openapi.json",
+    "dashboard": "/api/dashboard"
+  }
+}
+```
+
+This gives a discoverable entry point — any client can `GET /api/` and know what's available.
 
 ---
 
@@ -28,17 +60,18 @@
 
 Every model you register gets endpoints automatically under `/api/`:
 
-| Method | URL | Description | HTTP Status |
-|--------|-----|-------------|-------------|
-| `GET` | `/api/{entities}` | List all items (paginated) | 200 |
-| `POST` | `/api/{entities}` | Create a new item | 201 |
-| `GET` | `/api/{entities}/{id}` | Get one item by ID | 200 / 404 |
-| `PUT` | `/api/{entities}/{id}` | Update an item | 200 / 404 |
-| `DELETE` | `/api/{entities}/{id}` | Soft delete an item | 204 / 404 |
-| `POST` | `/api/{entities}/{id}/restore` | Restore a soft-deleted item | 204 / 404 |
-| `POST` | `/api/{entities}/bulk` | Bulk create | 201 |
-| `GET` | `/api/{entities}/export` | Export data | 200 |
-| `GET` | `/api/{entities}/{id}/history` | Audit trail | 200 |
+| Method | URL | Description | HTTP Status | Condition |
+|--------|-----|-------------|-------------|-----------|
+| `GET` | `/api/` | API Root (resource index) | 200 | Always |
+| `GET` | `/api/{entities}` | List all items (paginated) | 200 | Always |
+| `POST` | `/api/{entities}` | Create a new item | 201 | Always |
+| `GET` | `/api/{entities}/{id}` | Get one item by ID | 200 / 404 | Always |
+| `PUT` | `/api/{entities}/{id}` | Update an item | 200 / 404 | Always |
+| `DELETE` | `/api/{entities}/{id}` | Delete an item | 204 / 404 | Always |
+| `POST` | `/api/{entities}/{id}/restore` | Restore a soft-deleted item | 204 / 404 | `soft_delete=True` |
+| `POST` | `/api/{entities}/bulk` | Bulk create | 201 | Always |
+| `GET` | `/api/{entities}/export` | Export data | 200 | Always |
+| `GET` | `/api/{entities}/{id}/history` | Audit trail | 200 | `audit=True` |
 
 The base path (`/api`) is configurable:
 
@@ -109,7 +142,9 @@ All errors follow the same format:
 
 ### Delete (DELETE)
 
-Delete performs a **soft delete** by default. The item is hidden from list queries but can be restored.
+Delete behavior depends on the model's `soft_delete` option:
+- `soft_delete=True` → marks as deleted, hidden from list queries, can be restored
+- `soft_delete=False` (default) → permanent removal from the database
 
 ```bash
 curl -X DELETE http://localhost:8000/api/products/1
@@ -186,10 +221,10 @@ Case-insensitive partial match across all string/text fields.
 
 ## Soft Delete & Restore
 
-DELETE performs a soft delete by default. Items are hidden from list queries but can be viewed and restored.
+Soft delete is **opt-in** (disabled by default). When enabled, DELETE hides items from list queries instead of removing them. They can be viewed and restored.
 
 ```bash
-# Soft delete
+# Soft delete (when enabled)
 DELETE /api/products/1   → 204
 
 # View deleted items only
@@ -205,27 +240,73 @@ POST /api/products/1/restore   → 204
 from flashapi import Model
 
 # Per-entity
-Model(Product, soft_delete=True)      # Default: soft delete
-Model(LogEntry, soft_delete=False)    # Hard delete (permanent, no restore)
+Model(Product, soft_delete=True)      # Soft delete enabled
+Model(LogEntry, soft_delete=False)    # Hard delete (default)
 ```
 
 ### Behavior
 
 | `soft_delete` | DELETE action | Restore available | `?deleted=true` |
 |---|---|---|---|
-| `True` (default) | Marks as deleted, hidden from list | Yes | Shows deleted items |
-| `False` | Permanent removal from database | No | No effect |
+| `True` | Marks as deleted, hidden from list | Yes | Shows deleted items |
+| `False` (default) | Permanent removal from database | No | No effect |
+
+### Django / SQLAlchemy: the `deleted_at` field
+
+For Django and SQLAlchemy models, soft delete requires a **`deleted_at` field** on your model:
+
+```python
+# Django
+class Eleve(models.Model):
+    nom = models.CharField(max_length=100)
+    classe = models.ForeignKey(Classe, on_delete=models.CASCADE)
+    deleted_at = models.DateTimeField(null=True, blank=True)  # Required for soft delete
+```
+
+```python
+# SQLAlchemy
+class Eleve(Base):
+    __tablename__ = "eleves"
+    id = Column(Integer, primary_key=True)
+    nom = Column(String(100))
+    classe_id = Column(Integer, ForeignKey("classes.id"))
+    deleted_at = Column(DateTime, nullable=True)  # Required for soft delete
+```
+
+**If `soft_delete=True` but the model has no `deleted_at` field**, FlashAPI falls back to hard delete (permanent removal). No error — it just can't soft delete without a place to store the timestamp.
+
+For Pydantic/dataclass models (auto storage), FlashAPI manages the `deleted_at` column internally — you don't need to declare it.
 
 ### Cascade and soft delete
 
-FlashAPI soft-deletes **only the targeted entity**. It does NOT cascade to related entities.
+Soft delete sets `deleted_at = now()` — it does NOT trigger `on_delete=CASCADE`:
 
-- Soft-deleting a `Category` does NOT soft-delete its `Products`
-- If you need cascade soft-delete, implement it in custom logic (signals, hooks, custom service)
-- For Django: `on_delete=CASCADE` only triggers on hard deletes (real SQL DELETE), not on soft deletes
-- For SQLAlchemy: same — cascade rules only apply to actual deletions
+| Action | CASCADE triggered? | Explanation |
+|--------|-------------------|-------------|
+| Soft delete a `Classe` | **No** | The row still exists, just hidden. FK intact. |
+| Hard delete a `Classe` | **Yes** | Real SQL DELETE → Django/SQLAlchemy cascades to children |
+| Delete via Django Admin | **Yes** | Admin does `.delete()` (hard delete) |
 
-This is by design: cascade soft-delete is business logic that varies per application.
+**Consequences:**
+- Soft-deleting a `Classe` does NOT soft-delete its `Eleves` — they remain visible
+- If you hard-delete a `Classe` (via admin or `soft_delete=False`), all `Eleves` with `on_delete=CASCADE` are permanently removed — even those that were soft-deleted
+- FlashAPI does NOT cascade soft deletes. If you need that, implement it in signals/hooks
+
+**Recommendation:** if a parent uses `soft_delete=True`, protect children from accidental cascade:
+
+```python
+class Eleve(models.Model):
+    classe = models.ForeignKey(Classe, on_delete=models.PROTECT)  # Prevents accidental cascade
+    deleted_at = models.DateTimeField(null=True, blank=True)
+```
+
+Or use `SET_NULL` if the child can exist without a parent:
+
+```python
+class Eleve(models.Model):
+    classe = models.ForeignKey(Classe, on_delete=models.SET_NULL, null=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+```
 
 ---
 
@@ -300,18 +381,15 @@ Response:
 
 ### Configuration
 
-Audit can be toggled globally or per-entity:
+Audit is **opt-in** (disabled by default). Enable it per-entity:
 
 **FastAPI:**
 ```python
-# Globally disable audit
-FlashAPI(models=[Product], audit=False)
-
-# Per-entity: disable audit only for LogEntry
 from flashapi import Model
+
 FlashAPI(models=[
-    Product,                          # audit enabled (default)
-    Model(LogEntry, audit=False),     # no history, no audit recording
+    Product,                          # no audit (default)
+    Model(Invoice, audit=True),       # full audit trail
 ])
 ```
 
@@ -321,8 +399,8 @@ from flashapi import Model
 from flashapi.flask import register_models
 
 register_models(app, models=[
-    Product,                          # audit enabled (default)
-    Model(LogEntry, audit=False),     # no history for this entity
+    Product,                          # no audit (default)
+    Model(Invoice, audit=True),       # full audit trail
 ], engine=db.engine)
 ```
 
@@ -333,8 +411,8 @@ from flashapi.django import generate_urls
 
 urlpatterns = [
     path("api/", include(generate_urls(models=[
-        Product,                          # audit enabled (default)
-        Model(LogEntry, audit=False),     # no history for this entity
+        Product,                          # no audit (default)
+        Model(Invoice, audit=True),       # full audit trail
     ]))),
 ]
 ```
@@ -604,16 +682,49 @@ No annotation needed — FlashAPI detects the callable default and handles it.
 
 ### Django
 
-Auto-detection: `auto_now_add`, `auto_now`, and `default=callable` are automatically excluded:
+Auto-detection: fields with `auto_now_add=True`, `auto_now=True`, or `default=callable` are automatically excluded from inputs:
 
 ```python
 import uuid
 from django.db import models
 
-class Order(models.Model):
-    tracking_id = models.UUIDField(default=uuid.uuid4, unique=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    label = models.CharField(max_length=200)
+class Bulletin(models.Model):
+    tracking_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, primary_key=True)
+    eleve = models.ForeignKey(Eleve, on_delete=models.CASCADE)
+    trimestre = models.ForeignKey(Trimestre, on_delete=models.CASCADE)
+    moyenne_generale = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    rang = models.PositiveIntegerField(null=True, blank=True)
+    appreciation = models.TextField(blank=True)
+    date_generation = models.DateTimeField(auto_now_add=True)
+```
+
+POST body attendu (seuls les champs writable) :
+```json
+{"eleve_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "trimestre_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "moyenne_generale": 14.5, "rang": 3, "appreciation": "Bon travail"}
+```
+
+Champs exclus automatiquement de l'input :
+- `tracking_id` — a un `default=uuid.uuid4` (callable) ET est `primary_key=True`
+- `date_generation` — a `auto_now_add=True`
+
+**Règle Django :** un champ est exclu de l'input si au moins une de ces conditions est vraie :
+1. C'est un `AutoField` / `BigAutoField` (l'ID auto-incrémenté classique)
+2. Il a `primary_key=True` **et** un `default=callable` (comme un UUID)
+3. Il a `auto_now_add=True` (date de création)
+4. Il a `auto_now=True` (date de mise à jour)
+5. Il a un `default=callable` (ex: `default=uuid.uuid4`, `default=timezone.now`)
+
+**Important :** pour qu'un `UUIDField` soit exclu, il doit avoir `default=uuid.uuid4` (ou un autre callable). Un UUID sans default ne sera pas auto-généré — c'est à vous de le fournir.
+
+```python
+# Auto-exclu (a un default callable + primary_key)
+tracking_id = models.UUIDField(default=uuid.uuid4, primary_key=True)
+
+# Auto-exclu (a un default callable, même sans être PK)
+ref_code = models.UUIDField(default=uuid.uuid4, unique=True)
+
+# PAS exclu (pas de default callable — vous devez le fournir)
+external_id = models.UUIDField(unique=True)
 ```
 
 ### Supported auto types (Pydantic)
@@ -623,6 +734,63 @@ class Order(models.Model):
 | `"uuid"` | `uuid.uuid4()` as string |
 | `"datetime"` | Current UTC datetime (ISO 8601) |
 | `"date"` | Current UTC date (ISO 8601) |
+
+---
+
+## Relation Type Inference
+
+FlashAPI infers the correct type for ForeignKey fields by inspecting the primary key of the target model. If the target uses a UUID primary key, the FK field is typed as `uuid` (string in OpenAPI), not integer.
+
+### Django
+
+```python
+class Eleve(models.Model):
+    tracking_id = models.UUIDField(default=uuid.uuid4, primary_key=True)
+    nom = models.CharField(max_length=100)
+
+class Bulletin(models.Model):
+    tracking_id = models.UUIDField(default=uuid.uuid4, primary_key=True)
+    eleve = models.ForeignKey(Eleve, on_delete=models.CASCADE)
+    trimestre = models.ForeignKey(Trimestre, on_delete=models.CASCADE)
+```
+
+Le champ `eleve_id` sera typé **uuid** (string, format uuid) dans Swagger, car la PK de `Eleve` est un `UUIDField`.
+
+OpenAPI schema généré :
+```json
+{
+  "eleve_id": {"type": "string", "format": "uuid"},
+  "trimestre_id": {"type": "string", "format": "uuid"}
+}
+```
+
+Si la PK cible est un `AutoField` / `BigAutoField` classique (entier auto-incrémenté), le FK sera typé **integer** comme attendu.
+
+### SQLAlchemy
+
+En SQLAlchemy, le type est directement lu depuis la colonne FK elle-même :
+
+```python
+from sqlalchemy.dialects.postgresql import UUID
+
+class Eleve(Base):
+    __tablename__ = "eleves"
+    tracking_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+class Bulletin(Base):
+    __tablename__ = "bulletins"
+    eleve_id = Column(UUID(as_uuid=True), ForeignKey("eleves.tracking_id"))
+```
+
+Le type `UUID` de la colonne `eleve_id` est détecté automatiquement — pas besoin de configuration supplémentaire.
+
+### Résumé
+
+| PK cible | Type FK dans Swagger |
+|----------|---------------------|
+| `AutoField` / `BigAutoField` | `integer` |
+| `UUIDField` | `string` (format: uuid) |
+| `CharField` | `string` |
 
 ---
 
