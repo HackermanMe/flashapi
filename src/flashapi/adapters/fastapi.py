@@ -79,6 +79,7 @@ class FlashAPI:
         webhook_urls: Optional[list[str]] = None,
         rate_limit: Optional[int] = None,
         rate_window: int = 60,
+        auth_backend=None,
     ):
         self._app = FastAPI(
             title="FlashAPI",
@@ -119,6 +120,9 @@ class FlashAPI:
         # Metrics
         self._metrics = MetricsCollector()
 
+        # Auth
+        self._auth_backend = auth_backend
+
         for model_entry in models:
             self._prepare_model(model_entry)
 
@@ -136,6 +140,7 @@ class FlashAPI:
 
         self._register_relations()
         self._add_dashboard_routes()
+        self._add_api_root()
 
     def _prepare_model(self, model_entry) -> None:
         if isinstance(model_entry, Model):
@@ -148,6 +153,13 @@ class FlashAPI:
         schema.soft_delete = wrapper.soft_delete
         schema.audit = wrapper.audit
         schema.lookup_field = wrapper.lookup_field
+        schema.access = wrapper.access
+        schema.scope = wrapper.scope
+        schema.tenant_field = wrapper.tenant_field
+        schema.owner_field = wrapper.owner_field
+
+        from flashapi.core.schema import validate_soft_delete
+        validate_soft_delete(wrapper.model_class, wrapper.soft_delete)
 
         is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
 
@@ -173,6 +185,24 @@ class FlashAPI:
         @self._app.get(f"{bp}/dashboard/metrics.json", tags=["Dashboard"], name="dashboard_metrics")
         async def dashboard_metrics():
             return metrics.get_metrics(webhook)
+
+    def _add_api_root(self) -> None:
+        bp = self._base_path
+        schemas = self._schemas
+
+        @self._app.get(f"{bp}", tags=["Root"], name="api_root", include_in_schema=False)
+        @self._app.get(f"{bp}/", tags=["Root"], name="api_root_slash", include_in_schema=False)
+        async def api_root(request: Request):
+            base = str(request.base_url).rstrip("/") + bp
+            if not base.endswith("/"):
+                base += "/"
+            resources = {s.plural: base + s.plural + "/" for s in schemas}
+            links = {
+                "docs": base + "docs/",
+                "openapi": base + "openapi.json",
+                "dashboard": base + "dashboard/",
+            }
+            return {"resources": resources, "links": links}
 
     def _add_rate_limit_middleware(self) -> None:
         from starlette.middleware.base import BaseHTTPMiddleware
@@ -216,6 +246,48 @@ class FlashAPI:
                     formatter=formatter,
                 )
 
+    def _check_auth(self, request: Request, operation: str, schema: ModelSchema):
+        """Returns (user, role, error_response). error_response is None if access granted."""
+        from flashapi.features.auth import check_access, get_scope_filter
+
+        if self._auth_backend is None:
+            return None, "admin", None
+
+        model_access = schema.access
+        if model_access is None or model_access == "public" or model_access is True:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "public")
+                if op_access == "public":
+                    return None, "public", None
+            else:
+                return None, "public", None
+
+        user = self._auth_backend.authenticate(request)
+        if user is None:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "authenticated")
+                if op_access == "public":
+                    return None, "public", None
+            return None, "public", JSONResponse(
+                status_code=401,
+                content=create_error_response("Authentication required", 401),
+            )
+
+        role = self._auth_backend.get_role(user)
+        if not check_access(role, model_access, operation):
+            return user, role, JSONResponse(
+                status_code=403,
+                content=create_error_response("Forbidden", 403),
+            )
+        return user, role, None
+
+    def _get_scope_filter(self, user, role: str, schema: ModelSchema):
+        """Returns the scope filter dict or None."""
+        from flashapi.features.auth import get_scope_filter
+        if self._auth_backend is None or user is None:
+            return None
+        return get_scope_filter(user, self._auth_backend, schema.scope, schema.tenant_field, schema.owner_field, role)
+
     def _create_routes(self, schema: ModelSchema) -> None:
         table = schema.plural
         field_names = {f.name for f in schema.fields if not f.primary_key}
@@ -237,12 +309,12 @@ class FlashAPI:
             self._add_bulk_create_route(table, input_fields, formatter, storage, schema.name, model_schema)
 
         if "delete" in schema.permissions and schema.soft_delete:
-            self._add_restore_route(table, storage, schema.name, lookup_field)
+            self._add_restore_route(table, storage, schema.name, lookup_field, model_schema=schema)
 
         if "read" in schema.permissions:
             self._add_read_route(table, formatter, storage, schema.name, expandable, model_schema, lookup_field)
             if schema.audit:
-                self._add_history_route(table, schema.name, lookup_field)
+                self._add_history_route(table, schema.name, lookup_field, model_schema=schema)
 
         if "update" in schema.permissions:
             self._add_update_route(table, input_fields, formatter, storage, schema.name, update_model_cls, model_schema, lookup_field)
@@ -265,8 +337,17 @@ class FlashAPI:
             expand: Optional[str] = None,
             deleted: bool = False,
         ):
+            user, role, err = self._check_auth(request, "list", model_schema)
+            if err:
+                return err
+
             include_deleted = deleted and supports_soft_delete
             items = storage.list_all(table, include_deleted=include_deleted)
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            if scope_filter:
+                items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
             params = dict(request.query_params)
             items = apply_filters(items, params, field_names)
             if search:
@@ -287,10 +368,21 @@ class FlashAPI:
         lf = lookup_field
 
         @self._app.get(f"{bp}/{table}/{{item_id}}", tags=[tag], name=f"{table}_read")
-        async def route(item_id: str, expand: Optional[str] = None):
+        async def route(request: Request, item_id: str, expand: Optional[str] = None):
+            user, role, err = self._check_auth(request, "read", model_schema)
+            if err:
+                return err
+
             lookup_id = _parse_lookup_id(item_id, lf)
             item = storage.get(table, lookup_id, lookup_field=lf)
             if item is None:
+                return JSONResponse(
+                    status_code=404,
+                    content=create_error_response("Not found", 404),
+                )
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            if scope_filter and not all(item.get(k) == v for k, v in scope_filter.items()):
                 return JSONResponse(
                     status_code=404,
                     content=create_error_response("Not found", 404),
@@ -302,12 +394,18 @@ class FlashAPI:
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_history_route(self, table, entity_name, lookup_field="id"):
+    def _add_history_route(self, table, entity_name, lookup_field="id", model_schema=None):
         bp = self._base_path
         audit = self._audit
+        _schema = model_schema
 
         @self._app.get(f"{bp}/{table}/{{item_id}}/history", tags=[entity_name], name=f"{table}_history")
-        async def route(item_id: str):
+        async def route(request: Request, item_id: str):
+            if _schema:
+                user, role, err = self._check_auth(request, "read", _schema)
+                if err:
+                    return err
+
             if audit is None:
                 return JSONResponse(status_code=404, content=create_error_response("Audit not enabled", 404))
             history = audit.get_history(entity_name, item_id)
@@ -321,8 +419,17 @@ class FlashAPI:
         entity_audit = model_schema.audit
 
         @self._app.post(f"{bp}/{table}", status_code=201, tags=[tag], name=f"{table}_create")
-        async def route(body: body_model):
+        async def route(request: Request, body: body_model):
+            user, role, err = self._check_auth(request, "create", model_schema)
+            if err:
+                return err
+
             data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in input_fields}
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            if scope_filter:
+                data.update(scope_filter)
+
             item = storage.create(table, data)
             metrics.record("CREATE", tag, str(item.get("id", "")))
             if audit and entity_audit:
@@ -341,9 +448,26 @@ class FlashAPI:
         entity_audit = model_schema.audit
 
         @self._app.put(f"{bp}/{table}/{{item_id}}", tags=[tag], name=f"{table}_update")
-        async def route(item_id: str, body: body_model):
+        async def route(request: Request, item_id: str, body: body_model):
+            user, role, err = self._check_auth(request, "update", model_schema)
+            if err:
+                return err
+
             lookup_id = _parse_lookup_id(item_id, lf)
             old_item = storage.get(table, lookup_id, lookup_field=lf)
+            if old_item is None:
+                return JSONResponse(
+                    status_code=404,
+                    content=create_error_response("Not found", 404),
+                )
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            if scope_filter and not all(old_item.get(k) == v for k, v in scope_filter.items()):
+                return JSONResponse(
+                    status_code=404,
+                    content=create_error_response("Not found", 404),
+                )
+
             data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in input_fields}
             item = storage.update(table, lookup_id, data, lookup_field=lf)
             if item is None:
@@ -365,13 +489,35 @@ class FlashAPI:
         webhook = self._webhook
         metrics = self._metrics
         lf = lookup_field
-        entity_audit = tag  # reuse tag for entity name in audit
-        schema_audit = next((s.audit for s in self._schemas if s.name == tag), True)
-        schema_soft_delete = next((s.soft_delete for s in self._schemas if s.name == tag), True)
+        schema_audit = next((s.audit for s in self._schemas if s.name == tag), False)
+        schema_soft_delete = next((s.soft_delete for s in self._schemas if s.name == tag), False)
+        _model_schema = next((s for s in self._schemas if s.name == tag), None)
 
         @self._app.delete(f"{bp}/{table}/{{item_id}}", status_code=204, tags=[tag], name=f"{table}_delete")
-        async def route(item_id: str):
+        async def route(request: Request, item_id: str):
+            if _model_schema:
+                user, role, err = self._check_auth(request, "delete", _model_schema)
+                if err:
+                    return err
+            else:
+                user, role = None, "admin"
+
             lookup_id = _parse_lookup_id(item_id, lf)
+            existing = storage.get(table, lookup_id, lookup_field=lf)
+            if existing is None:
+                return JSONResponse(
+                    status_code=404,
+                    content=create_error_response("Not found", 404),
+                )
+
+            if _model_schema:
+                scope_filter = self._get_scope_filter(user, role, _model_schema)
+                if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                    return JSONResponse(
+                        status_code=404,
+                        content=create_error_response("Not found", 404),
+                    )
+
             deleted = storage.delete(table, lookup_id, soft=schema_soft_delete, lookup_field=lf)
             if not deleted:
                 return JSONResponse(
@@ -388,7 +534,11 @@ class FlashAPI:
         bp = self._base_path
 
         @self._app.get(f"{bp}/{table}/export", tags=[tag], name=f"{table}_export")
-        async def route(format: str = Query("csv")):
+        async def route(request: Request, format: str = Query("csv")):
+            user, role, err = self._check_auth(request, "list", model_schema)
+            if err:
+                return err
+
             fmt = format.lower()
             if fmt not in EXPORTERS:
                 return JSONResponse(
@@ -396,6 +546,11 @@ class FlashAPI:
                     content=create_error_response(f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400),
                 )
             items = storage.list_all(table)
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            if scope_filter:
+                items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
             fields = sorted(export_fields(model_schema))
             content = EXPORTERS[fmt](items, fields)
             return Response(
@@ -409,18 +564,26 @@ class FlashAPI:
 
         @self._app.post(f"{bp}/{table}/bulk", status_code=201, tags=[tag], name=f"{table}_bulk_create")
         async def route(request: Request):
+            user, role, err = self._check_auth(request, "create", model_schema)
+            if err:
+                return err
+
             body = await request.json()
             if not isinstance(body, list):
                 return JSONResponse(
                     status_code=400,
                     content=create_error_response("Request body must be a JSON array", 400),
                 )
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
             succeeded = 0
             failed = 0
             results = []
             for item_data in body:
                 try:
                     data = {k: v for k, v in item_data.items() if k in input_fields}
+                    if scope_filter:
+                        data.update(scope_filter)
                     item = storage.create(table, data)
                     item = filter_response(item, model_schema)
                     results.append(item)
@@ -432,12 +595,18 @@ class FlashAPI:
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 
-    def _add_restore_route(self, table, storage, tag, lookup_field="id"):
+    def _add_restore_route(self, table, storage, tag, lookup_field="id", model_schema=None):
         bp = self._base_path
         lf = lookup_field
+        _schema = model_schema
 
         @self._app.post(f"{bp}/{table}/{{item_id}}/restore", status_code=204, tags=[tag], name=f"{table}_restore")
-        async def route(item_id: str):
+        async def route(request: Request, item_id: str):
+            if _schema:
+                user, role, err = self._check_auth(request, "delete", _schema)
+                if err:
+                    return err
+
             lookup_id = _parse_lookup_id(item_id, lf)
             restored = storage.restore(table, lookup_id, lookup_field=lf)
             if not restored:

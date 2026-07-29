@@ -273,7 +273,12 @@ class Eleve(Base):
     deleted_at = Column(DateTime, nullable=True)  # Required for soft delete
 ```
 
-**If `soft_delete=True` but the model has no `deleted_at` field**, FlashAPI falls back to hard delete (permanent removal). No error — it just can't soft delete without a place to store the timestamp.
+**If `soft_delete=True` but the model has no `deleted_at` field**, FlashAPI raises a `FlashAPIConfigError` at startup with a clear message indicating which field to add. The server will not start until the model is corrected — this prevents silent data loss.
+
+```
+flashapi.core.schema.FlashAPIConfigError: Model "Eleve" has soft_delete=True but no 'deleted_at' field. Add:
+    deleted_at = models.DateTimeField(null=True, blank=True)
+```
 
 For Pydantic/dataclass models (auto storage), FlashAPI manages the `deleted_at` column internally — you don't need to declare it.
 

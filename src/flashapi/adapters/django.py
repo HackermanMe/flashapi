@@ -28,6 +28,7 @@ def generate_urls(
     webhook_urls: list[str] | None = None,
     rate_limit: int | None = None,
     rate_window: int = 60,
+    auth_backend=None,
 ):
     """Generate Django URL patterns for the given models (spec v1 compliant)."""
 
@@ -72,6 +73,14 @@ def generate_urls(
         schema.soft_delete = wrapper.soft_delete
         schema.audit = wrapper.audit
         schema.lookup_field = wrapper.lookup_field
+        schema.access = wrapper.access
+        schema.scope = wrapper.scope
+        schema.tenant_field = wrapper.tenant_field
+        schema.owner_field = wrapper.owner_field
+
+        from flashapi.core.schema import validate_soft_delete
+        validate_soft_delete(wrapper.model_class, wrapper.soft_delete)
+
         storage = DjangoORMStorage(wrapper.model_class)
         all_schemas.append(schema)
 
@@ -86,6 +95,7 @@ def generate_urls(
         patterns = _create_django_views(
             schema, storage, formatter,
             audit_log=audit_log, webhook=webhook, metrics=metrics,
+            auth_backend=auth_backend,
         )
         urlpatterns.extend(patterns)
 
@@ -101,7 +111,30 @@ def generate_urls(
             all_schemas, custom_routes or [], extra_views or [],
         ))
 
+    urlpatterns.extend(_create_api_root_view(all_schemas, docs))
+
     return urlpatterns
+
+
+def _create_api_root_view(schemas: list[ModelSchema], docs: bool):
+    from django.urls import path
+    from django.http import JsonResponse
+
+    def api_root(request):
+        resources = {}
+        base = request.build_absolute_uri(request.path)
+        if not base.endswith("/"):
+            base += "/"
+        for schema in schemas:
+            resources[schema.plural] = base + schema.plural + "/"
+        links = {}
+        if docs:
+            links["docs"] = base + "docs/"
+            links["openapi"] = base + "openapi.json"
+        links["dashboard"] = base + "dashboard/"
+        return JsonResponse({"resources": resources, "links": links})
+
+    return [path("", api_root, name="flashapi_root")]
 
 
 def _register_rate_limit_middleware(rate_limiter):
@@ -208,11 +241,13 @@ def _create_django_views(
     audit_log=None,
     webhook=None,
     metrics=None,
+    auth_backend=None,
 ):
     from django.urls import path
     from django.http import JsonResponse, HttpResponse
     from django.views.decorators.csrf import csrf_exempt
     import json
+    from flashapi.features.auth import check_access, get_scope_filter
 
     table = schema.plural
     field_names = {f.name for f in schema.fields if not f.primary_key}
@@ -221,7 +256,47 @@ def _create_django_views(
     entity_name = schema.name
     entity_audit = schema.audit
     supports_soft_delete = schema.soft_delete
+    model_access = schema.access
+    model_scope = schema.scope
+    model_tenant_field = schema.tenant_field
+    model_owner_field = schema.owner_field
     patterns = []
+
+    def _check_auth(request, operation):
+        """Returns (user, role, error_response). error_response is None if access granted."""
+        if auth_backend is None:
+            return None, "admin", None
+
+        if model_access is None or model_access == "public" or model_access is True:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "public")
+                if op_access == "public":
+                    return None, "public", None
+            else:
+                return None, "public", None
+
+        user = auth_backend.authenticate(request)
+        if user is None:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "authenticated")
+                if op_access == "public":
+                    return None, "public", None
+            return None, "public", JsonResponse(
+                create_error_response("Authentication required", 401), status=401
+            )
+
+        role = auth_backend.get_role(user)
+        if not check_access(role, model_access, operation):
+            return user, role, JsonResponse(
+                create_error_response("Forbidden", 403), status=403
+            )
+        return user, role, None
+
+    def _get_scope(user, role):
+        """Returns the scope filter dict or None."""
+        if auth_backend is None or user is None:
+            return None
+        return get_scope_filter(user, auth_backend, model_scope, model_tenant_field, model_owner_field, role)
 
     # --- List + Create ---
     if "list" in schema.permissions or "create" in schema.permissions:
@@ -229,6 +304,10 @@ def _create_django_views(
         def collection_view(request, _table=table, _fields=field_names, _schema=schema,
                             _input=input_fields, _lookup=lookup_field):
             if request.method == "GET" and "list" in _schema.permissions:
+                user, role, err = _check_auth(request, "list")
+                if err:
+                    return err
+
                 params = dict(request.GET)
                 params = {k: v[0] if isinstance(v, list) else v for k, v in params.items()}
                 try:
@@ -242,6 +321,11 @@ def _create_django_views(
 
                 include_deleted = deleted_param and supports_soft_delete
                 items = storage.list_all(_table, include_deleted=include_deleted)
+
+                scope_filter = _get_scope(user, role)
+                if scope_filter:
+                    items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
                 items = apply_filters(items, params, _fields)
                 if search and metrics:
                     metrics.record("SEARCH", entity_name)
@@ -256,11 +340,20 @@ def _create_django_views(
                 )
 
             elif request.method == "POST" and "create" in _schema.permissions:
+                user, role, err = _check_auth(request, "create")
+                if err:
+                    return err
+
                 try:
                     body = json.loads(request.body)
                 except (json.JSONDecodeError, ValueError):
                     return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
                 data = {k: v for k, v in body.items() if k in _input}
+
+                scope_filter = _get_scope(user, role)
+                if scope_filter:
+                    data.update(scope_filter)
+
                 item = storage.create(_table, data)
                 if metrics:
                     metrics.record("CREATE", entity_name, str(item.get("id", "")))
@@ -281,18 +374,27 @@ def _create_django_views(
         def bulk_create_view(request, _table=table, _input=input_fields, _schema=schema):
             if request.method != "POST":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+            user, role, err = _check_auth(request, "create")
+            if err:
+                return err
+
             try:
                 body = json.loads(request.body)
             except (json.JSONDecodeError, ValueError):
                 return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
             if not isinstance(body, list):
                 return JsonResponse(create_error_response("Request body must be a JSON array", 400), status=400)
+
+            scope_filter = _get_scope(user, role)
             succeeded = 0
             failed = 0
             results = []
             for item_data in body:
                 try:
                     data = {k: v for k, v in item_data.items() if k in _input}
+                    if scope_filter:
+                        data.update(scope_filter)
                     item = storage.create(_table, data)
                     item = filter_response(item, _schema)
                     results.append(item)
@@ -313,12 +415,22 @@ def _create_django_views(
         def export_view(request, _table=table, _schema=schema):
             if request.method != "GET":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+            user, role, err = _check_auth(request, "list")
+            if err:
+                return err
+
             fmt = request.GET.get("format", "csv").lower()
             if fmt not in EXPORTERS:
                 return JsonResponse(
                     create_error_response(f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400), status=400
                 )
             items = storage.list_all(_table)
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter:
+                items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
             fields = sorted(export_fields(_schema))
             content = EXPORTERS[fmt](items, fields)
             response = HttpResponse(content, content_type=CONTENT_TYPES[fmt])
@@ -333,18 +445,39 @@ def _create_django_views(
         def detail_view(request, item_id, _table=table, _fields=field_names, _schema=schema,
                         _input=input_fields, _lookup=lookup_field):
             if request.method == "GET" and "read" in _schema.permissions:
+                user, role, err = _check_auth(request, "read")
+                if err:
+                    return err
+
                 item = storage.get(_table, item_id, lookup_field=_lookup)
                 if item is None:
                     return JsonResponse(create_error_response("Not found", 404), status=404)
+
+                scope_filter = _get_scope(user, role)
+                if scope_filter and not all(item.get(k) == v for k, v in scope_filter.items()):
+                    return JsonResponse(create_error_response("Not found", 404), status=404)
+
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter))
 
             elif request.method == "PUT" and "update" in _schema.permissions:
+                user, role, err = _check_auth(request, "update")
+                if err:
+                    return err
+
                 try:
                     body = json.loads(request.body)
                 except (json.JSONDecodeError, ValueError):
                     return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+
                 old_item = storage.get(_table, item_id, lookup_field=_lookup)
+                if old_item is None:
+                    return JsonResponse(create_error_response("Not found", 404), status=404)
+
+                scope_filter = _get_scope(user, role)
+                if scope_filter and not all(old_item.get(k) == v for k, v in scope_filter.items()):
+                    return JsonResponse(create_error_response("Not found", 404), status=404)
+
                 data = {k: v for k, v in body.items() if k in _input}
                 item = storage.update(_table, item_id, data, lookup_field=_lookup)
                 if item is None:
@@ -359,6 +492,18 @@ def _create_django_views(
                 return JsonResponse(create_item_response(item, formatter))
 
             elif request.method == "DELETE" and "delete" in _schema.permissions:
+                user, role, err = _check_auth(request, "delete")
+                if err:
+                    return err
+
+                existing = storage.get(_table, item_id, lookup_field=_lookup)
+                if existing is None:
+                    return JsonResponse(create_error_response("Not found", 404), status=404)
+
+                scope_filter = _get_scope(user, role)
+                if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                    return JsonResponse(create_error_response("Not found", 404), status=404)
+
                 deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lookup)
                 if not deleted:
                     return JsonResponse(create_error_response("Not found", 404), status=404)
@@ -383,6 +528,11 @@ def _create_django_views(
         def restore_view(request, item_id, _table=table, _lookup=lookup_field):
             if request.method != "POST":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+            user, role, err = _check_auth(request, "delete")
+            if err:
+                return err
+
             restored = storage.restore(_table, item_id, lookup_field=_lookup)
             if not restored:
                 return JsonResponse(create_error_response("Not found", 404), status=404)
@@ -399,6 +549,11 @@ def _create_django_views(
         def history_view(request, item_id, _table=table, _entity=entity_name, _audit=audit_log):
             if request.method != "GET":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+            user, role, err = _check_auth(request, "read")
+            if err:
+                return err
+
             if _audit is None:
                 return JsonResponse(create_error_response("Audit not enabled", 404), status=404)
             history = _audit.get_history(_entity, str(item_id))

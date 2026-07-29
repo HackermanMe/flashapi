@@ -32,6 +32,7 @@ def register_models(
     webhook_urls: list[str] | None = None,
     rate_limit: int | None = None,
     rate_window: int = 60,
+    auth_backend=None,
 ):
     """Register models on an existing Flask app."""
     from flask import Blueprint
@@ -79,6 +80,13 @@ def register_models(
         schema.soft_delete = wrapper.soft_delete
         schema.audit = wrapper.audit
         schema.lookup_field = wrapper.lookup_field
+        schema.access = wrapper.access
+        schema.scope = wrapper.scope
+        schema.tenant_field = wrapper.tenant_field
+        schema.owner_field = wrapper.owner_field
+
+        from flashapi.core.schema import validate_soft_delete
+        validate_soft_delete(wrapper.model_class, wrapper.soft_delete)
 
         is_sa = hasattr(wrapper.model_class, "__table__") and hasattr(wrapper.model_class, "__tablename__")
 
@@ -103,6 +111,7 @@ def register_models(
         _create_flask_routes(
             blueprint, schema, storage, formatter, expandable, schema,
             audit_log=audit_log, webhook=webhook, metrics=metrics,
+            auth_backend=auth_backend,
         )
 
     parent_to_children = resolve_relations(all_schemas)
@@ -123,7 +132,26 @@ def register_models(
     if docs:
         _add_docs_routes(blueprint, all_schemas, custom_routes or [], flask_app=app)
 
+    _add_api_root_route(blueprint, all_schemas, base_path, docs)
+
     app.register_blueprint(blueprint)
+
+
+def _add_api_root_route(blueprint, schemas: list[ModelSchema], base_path: str, docs: bool):
+    from flask import jsonify, request
+
+    @blueprint.route("/", endpoint="flashapi_root")
+    def api_root():
+        base = request.url_root.rstrip("/") + base_path
+        if not base.endswith("/"):
+            base += "/"
+        resources = {s.plural: base + s.plural + "/" for s in schemas}
+        links = {}
+        if docs:
+            links["docs"] = base + "docs/"
+            links["openapi"] = base + "openapi.json"
+        links["dashboard"] = base + "dashboard/"
+        return jsonify({"resources": resources, "links": links})
 
 
 def _add_rate_limit_middleware(app, rate_limiter) -> None:
@@ -251,8 +279,10 @@ def _create_flask_routes(
     audit_log=None,
     webhook=None,
     metrics=None,
+    auth_backend=None,
 ) -> None:
     from flask import request, jsonify
+    from flashapi.features.auth import check_access, get_scope_filter
 
     table = schema.plural
     field_names = {f.name for f in schema.fields if not f.primary_key}
@@ -261,16 +291,59 @@ def _create_flask_routes(
     supports_soft_delete = schema.soft_delete
     entity_audit = schema.audit
     entity_name = schema.name
+    model_access = schema.access
+    model_scope = schema.scope
+    model_tenant_field = schema.tenant_field
+    model_owner_field = schema.owner_field
 
     id_converter = "int" if lookup_field == "id" else "string"
+
+    def _check_auth(operation):
+        if auth_backend is None:
+            return None, "admin", None
+
+        if model_access is None or model_access == "public" or model_access is True:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "public")
+                if op_access == "public":
+                    return None, "public", None
+            else:
+                return None, "public", None
+
+        user = auth_backend.authenticate(request)
+        if user is None:
+            if isinstance(model_access, dict):
+                op_access = model_access.get(operation, "authenticated")
+                if op_access == "public":
+                    return None, "public", None
+            return None, "public", (jsonify(create_error_response("Authentication required", 401)), 401)
+
+        role = auth_backend.get_role(user)
+        if not check_access(role, model_access, operation):
+            return user, role, (jsonify(create_error_response("Forbidden", 403)), 403)
+        return user, role, None
+
+    def _get_scope(user, role):
+        if auth_backend is None or user is None:
+            return None
+        return get_scope_filter(user, auth_backend, model_scope, model_tenant_field, model_owner_field, role)
 
     if "list" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["GET"], endpoint=f"{table}_list")
         def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema,
                        _metrics=metrics):
+            user, role, err = _check_auth("list")
+            if err:
+                return err
+
             deleted_param = request.args.get("deleted", "false").lower() == "true"
             include_deleted = deleted_param and supports_soft_delete
             items = storage.list_all(_table, include_deleted=include_deleted)
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter:
+                items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
             params = dict(request.args)
             try:
                 page = max(0, int(params.get("page", 0)))
@@ -299,8 +372,16 @@ def _create_flask_routes(
     if "read" in schema.permissions:
         @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["GET"], endpoint=f"{table}_get")
         def get_item(item_id, _table=table, _exp=expandable, _schema=model_schema, _lf=lookup_field):
+            user, role, err = _check_auth("read")
+            if err:
+                return err
+
             item = storage.get(_table, item_id, lookup_field=_lf)
             if item is None:
+                return jsonify(create_error_response("Not found", 404)), 404
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter and not all(item.get(k) == v for k, v in scope_filter.items()):
                 return jsonify(create_error_response("Not found", 404)), 404
 
             expand = request.args.get("expand")
@@ -313,6 +394,10 @@ def _create_flask_routes(
     if "read" in schema.permissions and entity_audit:
         @blueprint.route(f"/{table}/<{id_converter}:item_id>/history", methods=["GET"], endpoint=f"{table}_history")
         def history_item(item_id, _table=table, _entity=entity_name, _audit=audit_log):
+            user, role, err = _check_auth("read")
+            if err:
+                return err
+
             if _audit is None:
                 return jsonify(create_error_response("Audit not enabled", 404)), 404
             history = _audit.get_history(_entity, str(item_id))
@@ -322,10 +407,19 @@ def _create_flask_routes(
         @blueprint.route(f"/{table}", methods=["POST"], endpoint=f"{table}_create")
         def create_item(_table=table, _input=input_fields, _schema=model_schema,
                         _audit=audit_log, _webhook=webhook, _metrics=metrics):
+            user, role, err = _check_auth("create")
+            if err:
+                return err
+
             body = request.get_json(silent=True)
             if not body:
                 return jsonify(create_error_response("Request body is required", 400)), 400
             data = {k: v for k, v in body.items() if k in _input}
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter:
+                data.update(scope_filter)
+
             item = storage.create(_table, data)
             if _metrics:
                 _metrics.record("CREATE", entity_name, str(item.get("id", "")))
@@ -340,10 +434,22 @@ def _create_flask_routes(
         @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["PUT"], endpoint=f"{table}_update")
         def update_item(item_id, _table=table, _input=input_fields, _schema=model_schema,
                         _lf=lookup_field, _audit=audit_log, _webhook=webhook, _metrics=metrics):
+            user, role, err = _check_auth("update")
+            if err:
+                return err
+
             body = request.get_json(silent=True)
             if not body:
                 return jsonify(create_error_response("Request body is required", 400)), 400
+
             old_item = storage.get(_table, item_id, lookup_field=_lf)
+            if old_item is None:
+                return jsonify(create_error_response("Not found", 404)), 404
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter and not all(old_item.get(k) == v for k, v in scope_filter.items()):
+                return jsonify(create_error_response("Not found", 404)), 404
+
             data = {k: v for k, v in body.items() if k in _input}
             item = storage.update(_table, item_id, data, lookup_field=_lf)
             if item is None:
@@ -361,6 +467,18 @@ def _create_flask_routes(
         @blueprint.route(f"/{table}/<{id_converter}:item_id>", methods=["DELETE"], endpoint=f"{table}_delete")
         def delete_item(item_id, _table=table, _lf=lookup_field, _audit=audit_log,
                         _webhook=webhook, _metrics=metrics):
+            user, role, err = _check_auth("delete")
+            if err:
+                return err
+
+            existing = storage.get(_table, item_id, lookup_field=_lf)
+            if existing is None:
+                return jsonify(create_error_response("Not found", 404)), 404
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                return jsonify(create_error_response("Not found", 404)), 404
+
             deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
             if not deleted:
                 return jsonify(create_error_response("Not found", 404)), 404
@@ -375,6 +493,10 @@ def _create_flask_routes(
         if supports_soft_delete:
             @blueprint.route(f"/{table}/<{id_converter}:item_id>/restore", methods=["POST"], endpoint=f"{table}_restore")
             def restore_item(item_id, _table=table, _lf=lookup_field):
+                user, role, err = _check_auth("delete")
+                if err:
+                    return err
+
                 restored = storage.restore(_table, item_id, lookup_field=_lf)
                 if not restored:
                     return jsonify(create_error_response("Not found", 404)), 404
@@ -383,15 +505,23 @@ def _create_flask_routes(
     if "create" in schema.permissions:
         @blueprint.route(f"/{table}/bulk", methods=["POST"], endpoint=f"{table}_bulk_create")
         def bulk_create(_table=table, _input=input_fields, _schema=model_schema):
+            user, role, err = _check_auth("create")
+            if err:
+                return err
+
             body = request.get_json(silent=True)
             if not isinstance(body, list):
                 return jsonify(create_error_response("Request body must be a JSON array", 400)), 400
+
+            scope_filter = _get_scope(user, role)
             succeeded = 0
             failed = 0
             results = []
             for item_data in body:
                 try:
                     data = {k: v for k, v in item_data.items() if k in _input}
+                    if scope_filter:
+                        data.update(scope_filter)
                     item = storage.create(_table, data)
                     item = filter_response(item, _schema)
                     results.append(item)
@@ -409,12 +539,22 @@ def _create_flask_routes(
         @blueprint.route(f"/{table}/export", methods=["GET"], endpoint=f"{table}_export")
         def export_items(_table=table, _schema=model_schema):
             from flask import Response as FlaskResponse
+
+            user, role, err = _check_auth("list")
+            if err:
+                return err
+
             fmt = request.args.get("format", "csv").lower()
             if fmt not in EXPORTERS:
                 return jsonify(create_error_response(
                     f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400
                 )), 400
             items = storage.list_all(_table)
+
+            scope_filter = _get_scope(user, role)
+            if scope_filter:
+                items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
+
             fields = sorted(export_fields(_schema))
             content = EXPORTERS[fmt](items, fields)
             return FlaskResponse(

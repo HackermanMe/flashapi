@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Union
 
 
 class FieldType(Enum):
@@ -52,12 +52,46 @@ class ModelSchema:
     permissions: list[str] = field(
         default_factory=lambda: ["list", "read", "create", "update", "delete"]
     )
-    soft_delete: bool = True
-    audit: bool = True
+    soft_delete: bool = False
+    audit: bool = False
     lookup_field: str = "id"
+    access: Union[str, dict, bool, None] = None
+    scope: str | None = None  # "tenant", "owner", or "both"
+    tenant_field: str | None = None
+    owner_field: str | None = None
 
 
 ALL_OPERATIONS = ["list", "read", "create", "update", "delete"]
+
+SOFT_DELETE_FIELD = "deleted_at"
+
+
+class FlashAPIConfigError(Exception):
+    pass
+
+
+def validate_soft_delete(model_class: type, soft_delete: bool) -> None:
+    """Raise if soft_delete=True but the model has no deleted_at field."""
+    if not soft_delete:
+        return
+
+    if hasattr(model_class, "_meta"):
+        try:
+            model_class._meta.get_field(SOFT_DELETE_FIELD)
+        except Exception:
+            raise FlashAPIConfigError(
+                f'Model "{model_class.__name__}" has soft_delete=True but no '
+                f"'{SOFT_DELETE_FIELD}' field. Add:\n"
+                f"    {SOFT_DELETE_FIELD} = models.DateTimeField(null=True, blank=True)"
+            )
+    elif hasattr(model_class, "__table__"):
+        columns = {col.name for col in model_class.__table__.columns}
+        if SOFT_DELETE_FIELD not in columns:
+            raise FlashAPIConfigError(
+                f'Model "{model_class.__name__}" has soft_delete=True but no '
+                f"'{SOFT_DELETE_FIELD}' column. Add:\n"
+                f"    {SOFT_DELETE_FIELD} = Column(DateTime, nullable=True)"
+            )
 
 
 class Model:
@@ -71,15 +105,23 @@ class Model:
         exclude: list[str] | None = None,
         only: list[str] | None = None,
         plural: str | None = None,
-        soft_delete: bool = True,
-        audit: bool = True,
+        soft_delete: bool = False,
+        audit: bool = False,
         lookup_field: str = "id",
+        access: str | dict | bool | None = None,
+        scope: str | None = None,
+        tenant_field: str | None = None,
+        owner_field: str | None = None,
     ):
         self.model_class = model_class
         self.plural = plural
         self.soft_delete = soft_delete
         self.audit = audit
         self.lookup_field = lookup_field
+        self.access = access
+        self.scope = scope
+        self.tenant_field = tenant_field
+        self.owner_field = owner_field
         self.permissions = self._resolve_permissions(readonly, exclude, only)
 
     def _resolve_permissions(
