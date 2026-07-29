@@ -432,7 +432,12 @@ def _create_django_views(
                 items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
 
             fields = sorted(export_fields(_schema))
-            content = EXPORTERS[fmt](items, fields)
+            try:
+                content = EXPORTERS[fmt](items, fields)
+            except ImportError as e:
+                return JsonResponse(
+                    create_error_response(str(e), 400), status=400
+                )
             response = HttpResponse(content, content_type=CONTENT_TYPES[fmt])
             response["Content-Disposition"] = f'attachment; filename="{_table}.{fmt}"'
             return response

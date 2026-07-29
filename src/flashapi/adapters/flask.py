@@ -556,7 +556,10 @@ def _create_flask_routes(
                 items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
 
             fields = sorted(export_fields(_schema))
-            content = EXPORTERS[fmt](items, fields)
+            try:
+                content = EXPORTERS[fmt](items, fields)
+            except ImportError as e:
+                return jsonify(create_error_response(str(e), 400)), 400
             return FlaskResponse(
                 content,
                 mimetype=CONTENT_TYPES[fmt],

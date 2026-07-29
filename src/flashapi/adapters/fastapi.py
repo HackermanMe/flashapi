@@ -552,7 +552,12 @@ class FlashAPI:
                 items = [i for i in items if all(i.get(k) == v for k, v in scope_filter.items())]
 
             fields = sorted(export_fields(model_schema))
-            content = EXPORTERS[fmt](items, fields)
+            try:
+                content = EXPORTERS[fmt](items, fields)
+            except ImportError as e:
+                return JSONResponse(
+                    content=create_error_response(str(e), 400), status_code=400
+                )
             return Response(
                 content=content,
                 media_type=CONTENT_TYPES[fmt],
