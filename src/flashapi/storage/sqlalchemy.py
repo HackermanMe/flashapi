@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 from flashapi.storage.base import Storage
+
+
+SOFT_DELETE_FIELD = "deleted_at"
 
 
 class SQLAlchemyStorage(Storage):
@@ -15,6 +18,7 @@ class SQLAlchemyStorage(Storage):
         self._column_types = {
             col.name: col.type for col in model_class.__table__.columns
         }
+        self._has_deleted_at = SOFT_DELETE_FIELD in self._column_types
 
     def _coerce_values(self, data: dict[str, Any]) -> dict[str, Any]:
         """Convert string values to proper Python types based on column definitions."""
@@ -76,10 +80,17 @@ class SQLAlchemyStorage(Storage):
         finally:
             session.close()
 
-    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def list_all(self, table: str, *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict[str, Any]]:
         session = self._session_factory()
         try:
-            instances = session.query(self._model).all()
+            query = session.query(self._model)
+            if self._has_deleted_at:
+                col = getattr(self._model, SOFT_DELETE_FIELD)
+                if only_deleted:
+                    query = query.filter(col.isnot(None))
+                elif not include_deleted:
+                    query = query.filter(col.is_(None))
+            instances = query.all()
             return [self._to_dict(obj) for obj in instances]
         finally:
             session.close()
@@ -107,8 +118,14 @@ class SQLAlchemyStorage(Storage):
             instance = self._get_by_lookup(session, item_id, lookup_field)
             if instance is None:
                 return False
-            session.delete(instance)
-            session.commit()
+            if soft and self._has_deleted_at:
+                if getattr(instance, SOFT_DELETE_FIELD, None) is not None:
+                    return False
+                setattr(instance, SOFT_DELETE_FIELD, datetime.now(timezone.utc))
+                session.commit()
+            else:
+                session.delete(instance)
+                session.commit()
             return True
         except Exception:
             session.rollback()
@@ -117,7 +134,23 @@ class SQLAlchemyStorage(Storage):
             session.close()
 
     def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
-        return False
+        if not self._has_deleted_at:
+            return False
+        session = self._session_factory()
+        try:
+            instance = self._get_by_lookup(session, item_id, lookup_field)
+            if instance is None:
+                return False
+            if getattr(instance, SOFT_DELETE_FIELD, None) is None:
+                return False
+            setattr(instance, SOFT_DELETE_FIELD, None)
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def _to_dict(self, instance) -> dict[str, Any]:
         data = {}

@@ -341,8 +341,8 @@ class FlashAPI:
             if err:
                 return err
 
-            include_deleted = deleted and supports_soft_delete
-            items = storage.list_all(table, include_deleted=include_deleted)
+            only_deleted = deleted and supports_soft_delete
+            items = storage.list_all(table, only_deleted=only_deleted)
 
             scope_filter = self._get_scope_filter(user, role, model_schema)
             if scope_filter:

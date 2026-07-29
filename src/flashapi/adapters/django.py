@@ -319,8 +319,8 @@ def _create_django_views(
                 search = params.get("search")
                 deleted_param = params.get("deleted", "false").lower() == "true"
 
-                include_deleted = deleted_param and supports_soft_delete
-                items = storage.list_all(_table, include_deleted=include_deleted)
+                only_deleted = deleted_param and supports_soft_delete
+                items = storage.list_all(_table, only_deleted=only_deleted)
 
                 scope_filter = _get_scope(user, role)
                 if scope_filter:

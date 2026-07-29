@@ -112,17 +112,19 @@ class AutoStorage(Storage):
             return None
         return dict(row)
 
-    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def list_all(self, table: str, *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict[str, Any]]:
         safe_table = _validate_identifier(table)
         if table in self._soft_delete_tables:
-            if include_deleted:
+            if only_deleted:
                 cursor = self._conn.execute(
                     f"SELECT * FROM {safe_table} WHERE deleted_at IS NOT NULL"
                 )
-            else:
+            elif not include_deleted:
                 cursor = self._conn.execute(
                     f"SELECT * FROM {safe_table} WHERE deleted_at IS NULL"
                 )
+            else:
+                cursor = self._conn.execute(f"SELECT * FROM {safe_table}")
         else:
             cursor = self._conn.execute(f"SELECT * FROM {safe_table}")
         return [self._strip_internal(dict(row), table) for row in cursor.fetchall()]

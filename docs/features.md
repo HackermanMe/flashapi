@@ -248,8 +248,14 @@ Model(LogEntry, soft_delete=False)    # Hard delete (default)
 
 | `soft_delete` | DELETE action | Restore available | `?deleted=true` |
 |---|---|---|---|
-| `True` | Marks as deleted, hidden from list | Yes | Shows deleted items |
+| `True` | Sets `deleted_at = now()`, hidden from list | Yes | Shows **only** deleted items |
 | `False` (default) | Permanent removal from database | No | No effect |
+
+La logique du filtre :
+- `GET /api/enseignants/` → retourne uniquement les éléments **actifs** (`deleted_at IS NULL`)
+- `GET /api/enseignants/?deleted=true` → retourne uniquement les éléments **supprimés** (`deleted_at IS NOT NULL`)
+
+Le champ `deleted_at` est un `DateTimeField` nullable : `null` = actif, rempli = supprimé (avec le timestamp de suppression).
 
 ### Django / SQLAlchemy: the `deleted_at` field
 

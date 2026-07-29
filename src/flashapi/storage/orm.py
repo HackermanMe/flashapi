@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from flashapi.storage.base import Storage
+
+SOFT_DELETE_FIELD = "deleted_at"
 
 
 class DjangoORMStorage(Storage):
@@ -10,6 +13,14 @@ class DjangoORMStorage(Storage):
 
     def __init__(self, model_class: type):
         self._model = model_class
+        self._has_deleted_at = self._check_has_field(SOFT_DELETE_FIELD)
+
+    def _check_has_field(self, field_name: str) -> bool:
+        try:
+            self._model._meta.get_field(field_name)
+            return True
+        except Exception:
+            return False
 
     def create(self, table: str, data: dict[str, Any]) -> dict[str, Any]:
         instance = self._model.objects.create(**data)
@@ -29,8 +40,14 @@ class DjangoORMStorage(Storage):
             return None
         return self._to_dict(instance)
 
-    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
-        return [self._to_dict(obj) for obj in self._model.objects.all()]
+    def list_all(self, table: str, *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict[str, Any]]:
+        qs = self._model.objects.all()
+        if self._has_deleted_at:
+            if only_deleted:
+                qs = qs.filter(**{SOFT_DELETE_FIELD + "__isnull": False})
+            elif not include_deleted:
+                qs = qs.filter(**{SOFT_DELETE_FIELD + "__isnull": True})
+        return [self._to_dict(obj) for obj in qs]
 
     def update(self, table: str, item_id: int | str, data: dict[str, Any], *, lookup_field: str = "id") -> dict[str, Any] | None:
         instance = self._get_instance(item_id, lookup_field)
@@ -46,11 +63,26 @@ class DjangoORMStorage(Storage):
         instance = self._get_instance(item_id, lookup_field)
         if instance is None:
             return False
-        instance.delete()
+        if soft and self._has_deleted_at:
+            if getattr(instance, SOFT_DELETE_FIELD, None) is not None:
+                return False
+            setattr(instance, SOFT_DELETE_FIELD, datetime.now(timezone.utc))
+            instance.save()
+        else:
+            instance.delete()
         return True
 
     def restore(self, table: str, item_id: int | str, *, lookup_field: str = "id") -> bool:
-        return False
+        if not self._has_deleted_at:
+            return False
+        instance = self._get_instance(item_id, lookup_field)
+        if instance is None:
+            return False
+        if getattr(instance, SOFT_DELETE_FIELD, None) is None:
+            return False
+        setattr(instance, SOFT_DELETE_FIELD, None)
+        instance.save()
+        return True
 
     def _to_dict(self, instance) -> dict[str, Any]:
 

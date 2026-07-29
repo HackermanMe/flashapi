@@ -14,7 +14,7 @@ class Storage(ABC):
         ...
 
     @abstractmethod
-    def list_all(self, table: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def list_all(self, table: str, *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict[str, Any]]:
         ...
 
     @abstractmethod
