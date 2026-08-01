@@ -10,6 +10,7 @@ from flashapi.flask import register_models
 class User:
     name: str
     email: str
+    age: int = 0
 
 
 @dataclass
@@ -111,3 +112,112 @@ class TestFlaskAdapter:
         assert resp.status_code == 200
         spec = resp.get_json()
         assert spec["openapi"] == "3.1.0"
+
+    # --- Advanced filters ---
+
+    def test_filter_gt(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?age.gt=28")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Alice"
+
+    def test_filter_gte(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?age.gte=30")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Alice"
+
+    def test_filter_lt(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?age.lt=30")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Bob"
+
+    def test_filter_contains(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?name.contains=lic")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Alice"
+
+    def test_filter_startswith(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?name.startswith=Bo")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Bob"
+
+    def test_filter_in(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        client.post("/api/users", json={"name": "Charlie", "email": "c@t.com", "age": 35})
+        resp = client.get("/api/users?name.in=Alice,Charlie")
+        data = resp.get_json()["data"]
+        assert len(data) == 2
+
+    def test_filter_neq(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.get("/api/users?name.neq=Alice")
+        data = resp.get_json()["data"]
+        assert len(data) == 1
+        assert data[0]["name"] == "Bob"
+
+    # --- Bulk update ---
+
+    def test_bulk_update(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.put("/api/users/bulk", json=[
+            {"id": 1, "name": "Alice Updated"},
+            {"id": 2, "name": "Bob Updated"},
+        ])
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["meta"]["succeeded"] == 2
+        assert data["meta"]["failed"] == 0
+        assert data["data"][0]["name"] == "Alice Updated"
+        assert data["data"][1]["name"] == "Bob Updated"
+
+    def test_bulk_update_missing_id(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        resp = client.put("/api/users/bulk", json=[
+            {"name": "No ID"},
+        ])
+        assert resp.status_code == 200
+        assert resp.get_json()["meta"]["failed"] == 1
+
+    def test_bulk_update_not_array(self, client):
+        resp = client.put("/api/users/bulk", json={"id": 1, "name": "X"})
+        assert resp.status_code == 400
+
+    # --- Bulk delete ---
+
+    def test_bulk_delete(self, client):
+        client.post("/api/users", json={"name": "Alice", "email": "a@t.com", "age": 30})
+        client.post("/api/users", json={"name": "Bob", "email": "b@t.com", "age": 25})
+        resp = client.delete("/api/users/bulk", json=[1, 2])
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["meta"]["succeeded"] == 2
+        assert data["meta"]["failed"] == 0
+        # Verify they're gone
+        resp = client.get("/api/users")
+        assert resp.get_json()["meta"]["totalElements"] == 0
+
+    def test_bulk_delete_not_found(self, client):
+        resp = client.delete("/api/users/bulk", json=[999])
+        assert resp.status_code == 200
+        assert resp.get_json()["meta"]["failed"] == 1
+
+    def test_bulk_delete_not_array(self, client):
+        resp = client.delete("/api/users/bulk", json={"id": 1})
+        assert resp.status_code == 400

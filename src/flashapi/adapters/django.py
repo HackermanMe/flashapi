@@ -90,6 +90,7 @@ def generate_urls(
             audit=schema.audit,
             webhook=bool(webhook_urls),
             rate_limited=bool(rate_limit),
+            multi_tenant=schema.scope in ("tenant", "both"),
         )
 
         patterns = _create_django_views(
@@ -298,6 +299,11 @@ def _create_django_views(
             return None
         return get_scope_filter(user, auth_backend, model_scope, model_tenant_field, model_owner_field, role)
 
+    def _get_performer(user):
+        if auth_backend is None or user is None:
+            return ""
+        return auth_backend.get_user_identifier(user)
+
     # --- List + Create ---
     if "list" in schema.permissions or "create" in schema.permissions:
 
@@ -358,7 +364,7 @@ def _create_django_views(
                 if metrics:
                     metrics.record("CREATE", entity_name, str(item.get("id", "")))
                 if audit_log and entity_audit:
-                    audit_log.record("CREATE", entity_name, item.get("id", ""))
+                    audit_log.record("CREATE", entity_name, item.get("id", ""), performed_by=_get_performer(user))
                 if webhook:
                     webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
                 item = filter_response(item, _schema)
@@ -406,7 +412,178 @@ def _create_django_views(
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }, status=201)
 
-        patterns.append(path(f"{table}/bulk/", csrf_exempt(bulk_create_view), name=f"{table}_bulk_create"))
+        def bulk_view(request, _table=table, _input=input_fields, _schema=schema, _lf=lookup_field):
+            if request.method == "POST":
+                return bulk_create_view(request)
+            elif request.method == "PUT":
+                user, role, err = _check_auth(request, "update")
+                if err:
+                    return err
+
+                try:
+                    body = json.loads(request.body)
+                except (json.JSONDecodeError, ValueError):
+                    return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+                if not isinstance(body, list):
+                    return JsonResponse(create_error_response("Request body must be a JSON array", 400), status=400)
+
+                scope_filter = _get_scope(user, role)
+                succeeded = 0
+                failed = 0
+                results = []
+                for item_data in body:
+                    try:
+                        item_id = item_data.get(_lf)
+                        if item_id is None:
+                            failed += 1
+                            continue
+                        existing = storage.get(_table, item_id, lookup_field=_lf)
+                        if existing is None:
+                            failed += 1
+                            continue
+                        if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                            failed += 1
+                            continue
+                        data = {k: v for k, v in item_data.items() if k in _input and k != _lf}
+                        item = storage.update(_table, item_id, data, lookup_field=_lf)
+                        if item:
+                            item = filter_response(item, _schema)
+                            results.append(item)
+                            succeeded += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                return JsonResponse({
+                    "data": results,
+                    "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+                }, status=200)
+
+            elif request.method == "DELETE":
+                user, role, err = _check_auth(request, "delete")
+                if err:
+                    return err
+
+                try:
+                    body = json.loads(request.body)
+                except (json.JSONDecodeError, ValueError):
+                    return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+                if not isinstance(body, list):
+                    return JsonResponse(create_error_response("Request body must be a JSON array", 400), status=400)
+
+                scope_filter = _get_scope(user, role)
+                succeeded = 0
+                failed = 0
+                for item_id in body:
+                    try:
+                        existing = storage.get(_table, item_id, lookup_field=_lf)
+                        if existing is None:
+                            failed += 1
+                            continue
+                        if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                            failed += 1
+                            continue
+                        deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
+                        if deleted:
+                            succeeded += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                return JsonResponse({
+                    "data": [],
+                    "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+                }, status=200)
+
+            return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+        patterns.append(path(f"{table}/bulk/", csrf_exempt(bulk_view), name=f"{table}_bulk"))
+
+    elif "update" in schema.permissions or "delete" in schema.permissions:
+        def bulk_view(request, _table=table, _input=input_fields, _schema=schema, _lf=lookup_field):
+            if request.method == "PUT" and "update" in schema.permissions:
+                user, role, err = _check_auth(request, "update")
+                if err:
+                    return err
+
+                try:
+                    body = json.loads(request.body)
+                except (json.JSONDecodeError, ValueError):
+                    return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+                if not isinstance(body, list):
+                    return JsonResponse(create_error_response("Request body must be a JSON array", 400), status=400)
+
+                scope_filter = _get_scope(user, role)
+                succeeded = 0
+                failed = 0
+                results = []
+                for item_data in body:
+                    try:
+                        item_id = item_data.get(_lf)
+                        if item_id is None:
+                            failed += 1
+                            continue
+                        existing = storage.get(_table, item_id, lookup_field=_lf)
+                        if existing is None:
+                            failed += 1
+                            continue
+                        if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                            failed += 1
+                            continue
+                        data = {k: v for k, v in item_data.items() if k in _input and k != _lf}
+                        item = storage.update(_table, item_id, data, lookup_field=_lf)
+                        if item:
+                            item = filter_response(item, _schema)
+                            results.append(item)
+                            succeeded += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                return JsonResponse({
+                    "data": results,
+                    "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+                }, status=200)
+
+            elif request.method == "DELETE" and "delete" in schema.permissions:
+                user, role, err = _check_auth(request, "delete")
+                if err:
+                    return err
+
+                try:
+                    body = json.loads(request.body)
+                except (json.JSONDecodeError, ValueError):
+                    return JsonResponse(create_error_response("Invalid JSON body", 400), status=400)
+                if not isinstance(body, list):
+                    return JsonResponse(create_error_response("Request body must be a JSON array", 400), status=400)
+
+                scope_filter = _get_scope(user, role)
+                succeeded = 0
+                failed = 0
+                for item_id in body:
+                    try:
+                        existing = storage.get(_table, item_id, lookup_field=_lf)
+                        if existing is None:
+                            failed += 1
+                            continue
+                        if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                            failed += 1
+                            continue
+                        deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
+                        if deleted:
+                            succeeded += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                return JsonResponse({
+                    "data": [],
+                    "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+                }, status=200)
+
+            return JsonResponse(create_error_response("Method not allowed", 405), status=405)
+
+        patterns.append(path(f"{table}/bulk/", csrf_exempt(bulk_view), name=f"{table}_bulk"))
 
     # --- Export ---
     if "list" in schema.permissions:
@@ -499,7 +676,7 @@ def _create_django_views(
                 if metrics:
                     metrics.record("UPDATE", entity_name, str(item_id))
                 if audit_log and entity_audit:
-                    audit_log.record("UPDATE", entity_name, item_id, old_data=old_item, new_data=item)
+                    audit_log.record("UPDATE", entity_name, item_id, performed_by=_get_performer(user), old_data=old_item, new_data=item)
                 if webhook:
                     webhook.dispatch("UPDATE", entity_name, item_id, item)
                 item = filter_response(item, _schema)
@@ -524,7 +701,7 @@ def _create_django_views(
                 if metrics:
                     metrics.record("DELETE", entity_name, str(item_id))
                 if audit_log and entity_audit:
-                    audit_log.record("DELETE", entity_name, item_id)
+                    audit_log.record("DELETE", entity_name, item_id, performed_by=_get_performer(user))
                 if webhook:
                     webhook.dispatch("DELETE", entity_name, item_id, {})
                 return HttpResponse(status=204)

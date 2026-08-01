@@ -135,6 +135,7 @@ class FlashAPI:
                 audit=schema.audit,
                 webhook=bool(webhook_urls),
                 rate_limited=bool(rate_limit),
+                multi_tenant=schema.scope in ("tenant", "both"),
             )
             self._create_routes(schema)
 
@@ -288,6 +289,11 @@ class FlashAPI:
             return None
         return get_scope_filter(user, self._auth_backend, schema.scope, schema.tenant_field, schema.owner_field, role)
 
+    def _get_performer(self, user) -> str:
+        if self._auth_backend is None or user is None:
+            return ""
+        return self._auth_backend.get_user_identifier(user)
+
     def _create_routes(self, schema: ModelSchema) -> None:
         table = schema.plural
         field_names = {f.name for f in schema.fields if not f.primary_key}
@@ -318,9 +324,11 @@ class FlashAPI:
 
         if "update" in schema.permissions:
             self._add_update_route(table, input_fields, formatter, storage, schema.name, update_model_cls, model_schema, lookup_field)
+            self._add_bulk_update_route(table, input_fields, formatter, storage, schema.name, model_schema, lookup_field)
 
         if "delete" in schema.permissions:
             self._add_delete_route(table, storage, schema.name, lookup_field)
+            self._add_bulk_delete_route(table, storage, schema.name, model_schema, lookup_field)
 
     def _add_list_route(self, table, field_names, formatter, storage, tag, expandable, model_schema):
         bp = self._base_path
@@ -433,7 +441,7 @@ class FlashAPI:
             item = storage.create(table, data)
             metrics.record("CREATE", tag, str(item.get("id", "")))
             if audit and entity_audit:
-                audit.record("CREATE", tag, item.get("id", ""))
+                audit.record("CREATE", tag, item.get("id", ""), performed_by=self._get_performer(user))
             if webhook:
                 webhook.dispatch("CREATE", tag, item.get("id", ""), item)
             item = filter_response(item, model_schema)
@@ -477,7 +485,7 @@ class FlashAPI:
                 )
             metrics.record("UPDATE", tag, str(item_id))
             if audit and entity_audit:
-                audit.record("UPDATE", tag, item_id, old_data=old_item, new_data=item)
+                audit.record("UPDATE", tag, item_id, performed_by=self._get_performer(user), old_data=old_item, new_data=item)
             if webhook:
                 webhook.dispatch("UPDATE", tag, item_id, item)
             item = filter_response(item, model_schema)
@@ -526,7 +534,7 @@ class FlashAPI:
                 )
             metrics.record("DELETE", tag, str(item_id))
             if audit and schema_audit:
-                audit.record("DELETE", tag, item_id)
+                audit.record("DELETE", tag, item_id, performed_by=self._get_performer(user))
             if webhook:
                 webhook.dispatch("DELETE", tag, item_id, {})
 
@@ -606,6 +614,99 @@ class FlashAPI:
                     failed += 1
             return {
                 "data": results,
+                "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+            }
+
+    def _add_bulk_update_route(self, table, input_fields, formatter, storage, tag, model_schema, lookup_field):
+        bp = self._base_path
+        lf = lookup_field
+
+        @self._app.put(f"{bp}/{table}/bulk", status_code=200, tags=[tag], name=f"{table}_bulk_update")
+        async def route(request: Request):
+            user, role, err = self._check_auth(request, "update", model_schema)
+            if err:
+                return err
+
+            body = await request.json()
+            if not isinstance(body, list):
+                return JSONResponse(
+                    status_code=400,
+                    content=create_error_response("Request body must be a JSON array", 400),
+                )
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            succeeded = 0
+            failed = 0
+            results = []
+            for item_data in body:
+                try:
+                    item_id = item_data.get(lf)
+                    if item_id is None:
+                        failed += 1
+                        continue
+                    lookup_id = _parse_lookup_id(str(item_id), lf)
+                    existing = storage.get(table, lookup_id, lookup_field=lf)
+                    if existing is None:
+                        failed += 1
+                        continue
+                    if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                        failed += 1
+                        continue
+                    data = {k: v for k, v in item_data.items() if k in input_fields and k != lf}
+                    item = storage.update(table, lookup_id, data, lookup_field=lf)
+                    if item:
+                        item = filter_response(item, model_schema)
+                        results.append(item)
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+            return {
+                "data": results,
+                "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+            }
+
+    def _add_bulk_delete_route(self, table, storage, tag, model_schema, lookup_field):
+        bp = self._base_path
+        lf = lookup_field
+        soft = model_schema.soft_delete if model_schema else False
+
+        @self._app.delete(f"{bp}/{table}/bulk", status_code=200, tags=[tag], name=f"{table}_bulk_delete")
+        async def route(request: Request):
+            user, role, err = self._check_auth(request, "delete", model_schema)
+            if err:
+                return err
+
+            body = await request.json()
+            if not isinstance(body, list):
+                return JSONResponse(
+                    status_code=400,
+                    content=create_error_response("Request body must be a JSON array", 400),
+                )
+
+            scope_filter = self._get_scope_filter(user, role, model_schema)
+            succeeded = 0
+            failed = 0
+            for item_id in body:
+                try:
+                    lookup_id = _parse_lookup_id(str(item_id), lf)
+                    existing = storage.get(table, lookup_id, lookup_field=lf)
+                    if existing is None:
+                        failed += 1
+                        continue
+                    if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                        failed += 1
+                        continue
+                    deleted = storage.delete(table, lookup_id, soft=soft, lookup_field=lf)
+                    if deleted:
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+            return {
+                "data": [],
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 

@@ -106,6 +106,7 @@ def register_models(
             audit=schema.audit,
             webhook=bool(webhook_urls),
             rate_limited=bool(rate_limit),
+            multi_tenant=schema.scope in ("tenant", "both"),
         )
 
         _create_flask_routes(
@@ -328,6 +329,11 @@ def _create_flask_routes(
             return None
         return get_scope_filter(user, auth_backend, model_scope, model_tenant_field, model_owner_field, role)
 
+    def _get_performer(user):
+        if auth_backend is None or user is None:
+            return ""
+        return auth_backend.get_user_identifier(user)
+
     if "list" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["GET"], endpoint=f"{table}_list")
         def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema,
@@ -424,7 +430,7 @@ def _create_flask_routes(
             if _metrics:
                 _metrics.record("CREATE", entity_name, str(item.get("id", "")))
             if _audit and entity_audit:
-                _audit.record("CREATE", entity_name, item.get("id", ""))
+                _audit.record("CREATE", entity_name, item.get("id", ""), performed_by=_get_performer(user))
             if _webhook:
                 _webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
             item = filter_response(item, _schema)
@@ -457,7 +463,7 @@ def _create_flask_routes(
             if _metrics:
                 _metrics.record("UPDATE", entity_name, str(item_id))
             if _audit and entity_audit:
-                _audit.record("UPDATE", entity_name, item_id, old_data=old_item, new_data=item)
+                _audit.record("UPDATE", entity_name, item_id, performed_by=_get_performer(user), old_data=old_item, new_data=item)
             if _webhook:
                 _webhook.dispatch("UPDATE", entity_name, item_id, item)
             item = filter_response(item, _schema)
@@ -485,7 +491,7 @@ def _create_flask_routes(
             if _metrics:
                 _metrics.record("DELETE", entity_name, str(item_id))
             if _audit and entity_audit:
-                _audit.record("DELETE", entity_name, item_id)
+                _audit.record("DELETE", entity_name, item_id, performed_by=_get_performer(user))
             if _webhook:
                 _webhook.dispatch("DELETE", entity_name, item_id, {})
             return "", 204
@@ -532,6 +538,84 @@ def _create_flask_routes(
                 "data": results,
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }), 201
+
+    if "update" in schema.permissions:
+        @blueprint.route(f"/{table}/bulk", methods=["PUT"], endpoint=f"{table}_bulk_update")
+        def bulk_update(_table=table, _input=input_fields, _schema=model_schema, _lf=lookup_field):
+            user, role, err = _check_auth("update")
+            if err:
+                return err
+
+            body = request.get_json(silent=True)
+            if not isinstance(body, list):
+                return jsonify(create_error_response("Request body must be a JSON array", 400)), 400
+
+            scope_filter = _get_scope(user, role)
+            succeeded = 0
+            failed = 0
+            results = []
+            for item_data in body:
+                try:
+                    item_id = item_data.get(_lf)
+                    if item_id is None:
+                        failed += 1
+                        continue
+                    existing = storage.get(_table, item_id, lookup_field=_lf)
+                    if existing is None:
+                        failed += 1
+                        continue
+                    if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                        failed += 1
+                        continue
+                    data = {k: v for k, v in item_data.items() if k in _input and k != _lf}
+                    item = storage.update(_table, item_id, data, lookup_field=_lf)
+                    if item:
+                        item = filter_response(item, _schema)
+                        results.append(item)
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+            return jsonify({
+                "data": results,
+                "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+            }), 200
+
+    if "delete" in schema.permissions:
+        @blueprint.route(f"/{table}/bulk", methods=["DELETE"], endpoint=f"{table}_bulk_delete")
+        def bulk_delete(_table=table, _lf=lookup_field, _schema=model_schema):
+            user, role, err = _check_auth("delete")
+            if err:
+                return err
+
+            body = request.get_json(silent=True)
+            if not isinstance(body, list):
+                return jsonify(create_error_response("Request body must be a JSON array", 400)), 400
+
+            scope_filter = _get_scope(user, role)
+            succeeded = 0
+            failed = 0
+            for item_id in body:
+                try:
+                    existing = storage.get(_table, item_id, lookup_field=_lf)
+                    if existing is None:
+                        failed += 1
+                        continue
+                    if scope_filter and not all(existing.get(k) == v for k, v in scope_filter.items()):
+                        failed += 1
+                        continue
+                    deleted = storage.delete(_table, item_id, soft=supports_soft_delete, lookup_field=_lf)
+                    if deleted:
+                        succeeded += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+            return jsonify({
+                "data": [],
+                "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
+            }), 200
 
     if "list" in schema.permissions:
         from flashapi.features.export import EXPORTERS, CONTENT_TYPES
