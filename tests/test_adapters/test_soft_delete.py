@@ -2,6 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from flashapi.fastapi import FlashAPI
+from flashapi.core.schema import Model
 
 
 class Task(BaseModel):
@@ -14,7 +15,7 @@ def client(tmp_path):
     from fastapi.testclient import TestClient
 
     db_path = str(tmp_path / "test.db")
-    flash = FlashAPI(models=[Task], database=db_path)
+    flash = FlashAPI(models=[Model(Task, soft_delete=True)], database=db_path)
     return TestClient(flash.app)
 
 

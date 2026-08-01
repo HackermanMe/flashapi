@@ -2,6 +2,7 @@
 
 from flashapi.core.schema import Model
 from flashapi.core.custom_routes import CustomRoute, RouteParam, RouteBody, api_doc
+from flashapi.features.auth import AuthBackend
 
 __version__ = "0.1.0"
-__all__ = ["Model", "CustomRoute", "RouteParam", "RouteBody", "api_doc"]
+__all__ = ["Model", "CustomRoute", "RouteParam", "RouteBody", "api_doc", "AuthBackend"]

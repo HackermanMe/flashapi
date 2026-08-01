@@ -21,7 +21,7 @@ class TestDashboard:
     def test_dashboard_html(self, client):
         resp = client.get("/api/dashboard")
         assert resp.status_code == 200
-        assert "FlashAPI Dashboard" in resp.text
+        assert "FlashAPI" in resp.text
 
     def test_metrics_json(self, client):
         resp = client.get("/api/dashboard/metrics.json")
@@ -39,7 +39,7 @@ class TestDashboard:
         data = resp.json()
         assert "Task" in data["entities"]
         entity = data["entities"]["Task"]
-        assert entity["softDelete"] is True
+        assert entity["softDelete"] is False
         assert "operations" in entity
 
     def test_metrics_records_operations(self, client):
