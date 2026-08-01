@@ -36,7 +36,7 @@ Part of the **FlashAPI Ecosystem** — ensuring SDK client compatibility across 
 | **[Features](docs/features.md)** | CRUD, pagination, soft delete, bulk, export, audit, webhooks, rate limiting, dashboard |
 | **[Relations](docs/relations.md)** | Nested routes, expand, how relations are detected |
 | **[Customization](docs/customization.md)** | Base path, Model wrapper, response format, feature toggles |
-| **[Authentication](docs/authentication.md)** | How to protect endpoints (Django middleware, FastAPI deps, Flask before_request) |
+| **[Authentication](docs/authentication.md)** | AuthBackend interface, access control, multi-tenancy, scope, full examples |
 | **[Custom Logic](docs/custom-logic.md)** | How FlashAPI coexists with your business logic |
 | **[Framework Notes](docs/framework-notes.md)** | Django, FastAPI, Flask specifics |
 | **[Full Examples](docs/examples.md)** | E-commerce, school, restaurant, blog, SaaS, minimal todo |
@@ -76,17 +76,18 @@ uvicorn main:app --reload
 That's it. You now have:
 
 ```
+GET    /api/                   → API Root (resource index)
 GET    /api/products           → List (paginated, filterable, sortable, searchable)
 POST   /api/products           → Create
 GET    /api/products/{id}      → Read
 PUT    /api/products/{id}      → Update
-DELETE /api/products/{id}      → Soft delete
-POST   /api/products/{id}/restore  → Restore
+DELETE /api/products/{id}      → Delete (hard delete by default)
 POST   /api/products/bulk      → Bulk create
 GET    /api/products/export    → Export (CSV/XLSX/PDF)
-GET    /api/products/{id}/history  → Audit trail
 GET    /api/dashboard          → Live dashboard
 ```
+
+Add `soft_delete=True` for restore + soft delete, `audit=True` for history endpoint.
 
 ### FastAPI (existing project)
 
@@ -142,20 +143,21 @@ All responses follow a consistent format:
 
 For every model, FlashAPI generates:
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/{entities}` | Paginated list with filtering, sorting, search |
-| `POST /api/{entities}` | Create |
-| `GET /api/{entities}/{id}` | Read one |
-| `PUT /api/{entities}/{id}` | Update |
-| `DELETE /api/{entities}/{id}` | Soft delete |
-| `POST /api/{entities}/{id}/restore` | Restore deleted |
-| `POST /api/{entities}/bulk` | Bulk create |
-| `GET /api/{entities}/export?format=csv` | Export (csv, xlsx, pdf) |
-| `GET /api/{entities}/{id}/history` | Audit trail |
-| `GET /api/dashboard` | Live metrics dashboard |
+| Endpoint | Description | Condition |
+|----------|-------------|-----------|
+| `GET /api/` | API Root (resource index) | Always |
+| `GET /api/{entities}` | Paginated list with filtering, sorting, search | Always |
+| `POST /api/{entities}` | Create | Always |
+| `GET /api/{entities}/{id}` | Read one | Always |
+| `PUT /api/{entities}/{id}` | Update | Always |
+| `DELETE /api/{entities}/{id}` | Delete | Always |
+| `POST /api/{entities}/{id}/restore` | Restore deleted | `soft_delete=True` |
+| `POST /api/{entities}/bulk` | Bulk create | Always |
+| `GET /api/{entities}/export?format=csv` | Export (csv, xlsx, pdf) | Always |
+| `GET /api/{entities}/{id}/history` | Audit trail | `audit=True` |
+| `GET /api/dashboard` | Live metrics dashboard | Always |
 
-Plus: `?expand=relation` to inline related objects, `?deleted=true` to view deleted items, and Swagger UI docs.
+Plus: `?expand=relation` to inline related objects, `?deleted=true` to view deleted items (when soft_delete enabled), auth+scope enforcement, and Swagger UI docs.
 
 ---
 
@@ -173,18 +175,20 @@ Plus: `?expand=relation` to inline related objects, `?deleted=true` to view dele
 ## Customization
 
 ```python
-from flashapi import Model
+from flashapi import Model, AuthBackend
 
 FlashAPI(
     models=[
-        Product,                               # Full CRUD
-        Model(Order, exclude=["delete"]),      # No delete
-        Model(Config, readonly=True),          # GET only
-        Model(Log, only=["list"]),             # List only
-        Model(Animal, plural="animaux"),       # Custom plural
+        Product,                                           # Full CRUD, public
+        Model(Order, exclude=["delete"]),                  # No delete
+        Model(Config, readonly=True, access="admin"),      # GET only, admin
+        Model(Log, only=["list"]),                         # List only
+        Model(Animal, plural="animaux"),                   # Custom plural
+        Model(Invoice, soft_delete=True, audit=True),      # Opt-in features
+        Model(Eleve, access="staff", scope="tenant", tenant_field="ecole_id"),
     ],
     base_path="/api",       # Configurable prefix (default: /api)
-    audit=True,             # Audit trail
+    auth_backend=MyAuth(),  # Your AuthBackend implementation
     webhook_urls=["http://localhost:9090/hooks"],
     rate_limit=100,         # 100 requests per window
     rate_window=60,         # 60 seconds window
@@ -195,15 +199,41 @@ See [Customization docs](docs/customization.md) for all options.
 
 ---
 
-## Authentication
+## Authentication & Multi-Tenancy
 
-FlashAPI does NOT handle auth. You protect routes using your framework's standard mechanisms:
+FlashAPI does NOT handle login/tokens/OAuth. It consumes auth decisions from your existing stack via a simple `AuthBackend` interface:
 
-- **FastAPI**: dependencies / middleware ([example](docs/authentication.md#fastapi-dependency-injection))
-- **Flask**: `before_request` ([example](docs/authentication.md#flask-before_request))
-- **Django**: middleware ([example](docs/authentication.md#django-middleware))
+```python
+from flashapi import Model, AuthBackend
 
-See [Authentication docs](docs/authentication.md) for full examples including RBAC, JWT, API keys.
+class MyAuth(AuthBackend):
+    def authenticate(self, request):
+        return request.user if request.user.is_authenticated else None
+    def get_role(self, user):
+        if user.is_superuser: return "admin"
+        return "staff" if user.is_staff else "authenticated"
+    def get_tenant_id(self, user):
+        return user.organization_id
+
+FlashAPI(
+    models=[
+        Model(Product, access="public"),
+        Model(Order, access="authenticated", scope="owner", owner_field="user_id"),
+        Model(Eleve, access="staff", scope="tenant", tenant_field="ecole_id"),
+    ],
+    auth_backend=MyAuth(),
+)
+```
+
+**Features:**
+- Per-model / per-operation access control (role hierarchy: public < authenticated < staff < admin)
+- Multi-tenancy: automatic tenant/owner data isolation
+- Automatic tenant_id injection on create
+- Cross-tenant attempts return 404 (no information leakage)
+- Admin bypasses all scopes
+- Works identically on Django, Flask, FastAPI
+
+See [Authentication docs](docs/authentication.md) for full examples (JWT, OAuth2 Google, API keys, SaaS, school management).
 
 ---
 
@@ -231,7 +261,8 @@ See [Custom Logic docs](docs/custom-logic.md) for patterns and decision guide.
 - **Standardized.** One SDK client works seamlessly across backends.
 - **Zero intrusion.** Does not modify your models, migrations, or existing code.
 - **Composable.** Use it for 2 models or 20. Mix with custom endpoints freely.
-- **No opinion on auth.** Your project, your rules.
+- **Auth-agnostic.** Plug in any auth stack (OAuth2, JWT, session, OTP, magic links). FlashAPI never handles login/crypto — it only consumes auth decisions.
+- **Multi-tenant ready.** Built-in tenant/owner data isolation with zero custom code.
 - **Framework-native.** Generates standard routes. No lock-in, no proprietary runtime.
 
 ---

@@ -490,6 +490,30 @@ class Note(models.Model):
 ```
 
 ```python
+# gestionEcole/auth_backend.py
+from flashapi import AuthBackend
+
+class EcoleAuth(AuthBackend):
+    def authenticate(self, request):
+        if request.user.is_authenticated:
+            return request.user
+        return None
+
+    def get_role(self, user):
+        if user.is_superuser:
+            return "admin"           # Super-admin (multi-school platform)
+        if user.groups.filter(name="directeurs").exists():
+            return "staff"           # School director
+        return "authenticated"       # Teacher
+
+    def get_tenant_id(self, user):
+        return getattr(user, 'ecole_id', None)
+
+    def get_owner_id(self, user):
+        return user.pk
+```
+
+```python
 # gestionEcole/urls.py
 from django.contrib import admin
 from django.urls import path, include
@@ -498,62 +522,81 @@ from flashapi import Model
 from backend.models import (
     AnneeScolaire, Niveau, Classe, Enseignant, Eleve, Note
 )
+from .auth_backend import EcoleAuth
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include(generate_urls(
         models=[
-            AnneeScolaire,
-            Model(Niveau, plural="niveaux"),
-            Classe,
-            Enseignant,
-            Eleve,
-            Note,
-        ]
+            # Reference data — public read, admin write
+            Model(AnneeScolaire,
+                  access={"list": "public", "read": "public", "create": "admin", "update": "admin", "delete": "admin"}),
+            Model(Niveau, plural="niveaux",
+                  access={"list": "public", "read": "public", "create": "admin", "update": "admin", "delete": "admin"}),
+
+            # School-scoped — staff+ can CRUD, isolated per school
+            Model(Classe, access="staff", scope="tenant", tenant_field="ecole_id"),
+            Model(Enseignant, access="staff", scope="tenant", tenant_field="ecole_id"),
+            Model(Eleve, access="staff", scope="tenant", tenant_field="ecole_id",
+                  soft_delete=True, audit=True),
+
+            # Notes — isolated by school AND teacher
+            Model(Note, access="authenticated", scope="both",
+                  tenant_field="ecole_id", owner_field="enseignant_id", audit=True),
+        ],
+        auth_backend=EcoleAuth(),
     ))),
 ]
 ```
 
 **Generated endpoints:**
 ```
-GET/POST     /api/anneescolaires/
+GET          /api/                              (API Root — resource index)
+GET/POST     /api/anneescolaires/              (public read, admin write)
 GET/PUT/DEL  /api/anneescolaires/{id}/
-GET/POST     /api/niveaux/
+GET/POST     /api/niveaux/                     (public read, admin write)
 GET/PUT/DEL  /api/niveaux/{id}/
-GET/POST     /api/classes/
+GET/POST     /api/classes/                     (staff+, school-scoped)
 GET/PUT/DEL  /api/classes/{id}/
-GET/POST     /api/enseignants/
+GET/POST     /api/enseignants/                 (staff+, school-scoped)
 GET/PUT/DEL  /api/enseignants/{id}/
-GET/POST     /api/eleves/
+GET/POST     /api/eleves/                      (staff+, school-scoped, soft delete + audit)
 GET/PUT/DEL  /api/eleves/{id}/
-GET/POST     /api/notes/
+POST         /api/eleves/{id}/restore          (soft delete enabled)
+GET          /api/eleves/{id}/history          (audit enabled)
+GET/POST     /api/notes/                       (auth, teacher sees only own notes)
 GET/PUT/DEL  /api/notes/{id}/
 GET          /api/niveaux/{id}/classes/        (nested)
 GET          /api/classes/{id}/eleves/         (nested)
 GET          /api/eleves/{id}/notes/           (nested)
-GET          /api/classes/?expand=niveau       (expand)
-GET          /api/eleves/?expand=classe        (expand)
 GET          /api/docs/                        (Swagger UI)
 ```
 
 **Usage examples:**
 ```bash
-# Create a school year
-curl -X POST http://localhost:8000/api/anneescolaires/ \
+# Public — anyone can list school years (no auth needed)
+curl http://localhost:8000/api/anneescolaires/
+
+# Director (staff, ecole_id=1) lists students — sees only their school
+curl -H "Cookie: sessionid=directeur_session" http://localhost:8000/api/eleves/
+
+# Director creates a student — ecole_id=1 auto-injected
+curl -X POST -H "Cookie: sessionid=directeur_session" \
   -H "Content-Type: application/json" \
-  -d '{"libelle": "2024-2025", "date_debut": "2024-09-01", "date_fin": "2025-06-30", "est_active": true}'
+  -d '{"matricule": "E001", "nom": "Dupont", "prenom": "Marie", "date_naissance": "2010-05-15", "sexe": "F"}' \
+  http://localhost:8000/api/eleves/
 
-# List students in class 1
-curl http://localhost:8000/api/classes/1/eleves/
+# Teacher (authenticated, ecole_id=1) lists notes — sees only their own notes
+curl -H "Cookie: sessionid=teacher_session" http://localhost:8000/api/notes/
 
-# Get a student with class details
-curl http://localhost:8000/api/eleves/1/?expand=classe
+# Teacher from school 2 cannot see school 1's students → 404
+curl -H "Cookie: sessionid=other_school_teacher" http://localhost:8000/api/eleves/1/
 
-# Search students by name
-curl http://localhost:8000/api/eleves/?search=dupont
+# Super-admin sees ALL data across all schools (admin bypass)
+curl -H "Cookie: sessionid=superadmin_session" http://localhost:8000/api/eleves/
 
-# Filter notes by student
-curl http://localhost:8000/api/notes/?eleve_id=1&sort=-valeur
+# View audit trail for a student
+curl -H "Cookie: sessionid=directeur_session" http://localhost:8000/api/eleves/1/history
 ```
 
 ---
@@ -707,9 +750,15 @@ python app.py
 
 ## Multi-tenant SaaS (Django)
 
+A real multi-tenant SaaS with auth, tenant isolation, and role-based access.
+
 ```python
 # models.py
 from django.db import models
+from django.contrib.auth.models import AbstractUser
+
+class User(AbstractUser):
+    organization_id = models.IntegerField(null=True, blank=True)
 
 class Organization(models.Model):
     name = models.CharField(max_length=200)
@@ -718,50 +767,115 @@ class Organization(models.Model):
 
 class Project(models.Model):
     name = models.CharField(max_length=200)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    organization_id = models.IntegerField()
     description = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Task(models.Model):
     title = models.CharField(max_length=200)
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
-    assigned_to = models.CharField(max_length=100, blank=True)
+    organization_id = models.IntegerField()
+    assigned_to_id = models.IntegerField(null=True, blank=True)
     status = models.CharField(max_length=20, default="todo")
     priority = models.IntegerField(default=0)
     due_date = models.DateField(null=True, blank=True)
 
+class Invoice(models.Model):
+    organization_id = models.IntegerField()
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    paid = models.BooleanField(default=False)
+    issued_at = models.DateTimeField(auto_now_add=True)
 
+class Notification(models.Model):
+    user_id = models.IntegerField()
+    message = models.TextField()
+    read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+```python
+# auth_backend.py
+from flashapi import AuthBackend
+
+class SaaSAuth(AuthBackend):
+    def authenticate(self, request):
+        if request.user.is_authenticated:
+            return request.user
+        return None
+
+    def get_role(self, user):
+        if user.is_superuser:
+            return "admin"          # Platform admin — sees all orgs
+        if user.is_staff:
+            return "staff"          # Org admin — manages their org
+        return "authenticated"      # Regular member
+
+    def get_tenant_id(self, user):
+        return user.organization_id
+
+    def get_owner_id(self, user):
+        return user.pk
+```
+
+```python
 # urls.py
+from django.contrib import admin
 from django.urls import path, include
 from flashapi.django import generate_urls
 from flashapi import Model
-from myapp.models import Organization, Project, Task
+from myapp.models import Organization, Project, Task, Invoice, Notification
+from myapp.auth_backend import SaaSAuth
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include(generate_urls(
         models=[
-            Model(Organization, exclude=["delete"]),  # Can't delete orgs via API
-            Project,
-            Task,
-        ]
+            # Platform-level (admin only for write)
+            Model(Organization, exclude=["delete"],
+                  access={"list": "public", "read": "public", "create": "admin", "update": "admin"}),
+
+            # Org-wide data (all members see their org's data)
+            Model(Project, access="authenticated", scope="tenant", tenant_field="organization_id"),
+            Model(Task, access="authenticated", scope="tenant", tenant_field="organization_id",
+                  soft_delete=True, audit=True),
+
+            # Billing (org admins only)
+            Model(Invoice, access="staff", scope="tenant", tenant_field="organization_id",
+                  audit=True, exclude=["delete"]),
+
+            # Personal (each user only sees their own)
+            Model(Notification, access="authenticated", scope="owner", owner_field="user_id",
+                  exclude=["create", "update"]),
+        ],
+        auth_backend=SaaSAuth(),
     ))),
 ]
 ```
 
-**Usage:**
+**What happens:**
 ```bash
-# List all tasks in project 1
-curl http://localhost:8000/api/projects/1/tasks/
+# Alice (org_id=1, role=authenticated) lists tasks → sees only org 1's tasks
+curl -H "Cookie: sessionid=alice_session" http://localhost:8000/api/tasks/
 
-# Filter tasks by status
-curl http://localhost:8000/api/tasks/?status=todo&sort=priority
+# Alice creates a task → organization_id=1 auto-injected
+curl -X POST -H "Cookie: sessionid=alice_session" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Fix bug", "status": "todo", "priority": 1}' \
+  http://localhost:8000/api/tasks/
 
-# Get task with project details
-curl http://localhost:8000/api/tasks/1/?expand=project
+# Bob (org_id=2) tries to access Alice's task → 404 (not 403)
+curl -H "Cookie: sessionid=bob_session" http://localhost:8000/api/tasks/1/
 
-# Search across all tasks
-curl http://localhost:8000/api/tasks/?search=refactor
+# Platform admin sees ALL tasks across all orgs
+curl -H "Cookie: sessionid=admin_session" http://localhost:8000/api/tasks/
+
+# Staff (org admin) can see invoices, regular members cannot
+curl -H "Cookie: sessionid=alice_session" http://localhost:8000/api/invoices/
+# → 403 Forbidden (alice is "authenticated", needs "staff")
+
+# Notifications: each user only sees their own
+curl -H "Cookie: sessionid=alice_session" http://localhost:8000/api/notifications/
+# → Only Alice's notifications
 ```
 
 ---

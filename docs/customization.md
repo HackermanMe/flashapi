@@ -12,6 +12,11 @@
   - [exclude](#exclude)
   - [only](#only)
   - [plural](#plural)
+  - [soft_delete](#soft_delete)
+  - [audit](#audit)
+  - [lookup_field](#lookup_field)
+  - [access](#access)
+  - [scope](#scope)
   - [Combining options](#combining-options)
 - [Custom Plural Names](#custom-plural-names)
 - [Custom Response Format](#custom-response-format)
@@ -99,28 +104,37 @@ Model(MatrixData, plural="matrix-data")    # Invariable
 
 ### soft_delete
 
-Controls whether DELETE performs a soft delete (marks as deleted) or a hard delete (removes from DB). Default: `True`.
+Controls whether DELETE performs a soft delete (marks as deleted) or a hard delete (removes from DB). Default: `False`.
 
 ```python
-Model(LogEntry, soft_delete=False)  # DELETE really removes the row
-Model(Product, soft_delete=True)    # DELETE marks as deleted (default)
+Model(Product, soft_delete=True)    # DELETE marks as deleted (opt-in)
+Model(LogEntry, soft_delete=False)  # DELETE really removes the row (default)
 ```
 
-When `soft_delete=False`:
+When `soft_delete=True`:
+- DELETE marks the item as deleted (hidden from list queries)
+- `?deleted=true` parameter shows deleted items
+- `/restore` endpoint available
+
+When `soft_delete=False` (default):
 - No `?deleted=true` parameter
 - No `/restore` endpoint
 - DELETE permanently removes the record
 
 ### audit
 
-Controls whether CRUD operations are recorded in the audit trail. Default: `True`.
+Controls whether CRUD operations are recorded in the audit trail. Default: `False`.
 
 ```python
-Model(TempData, audit=False)   # No history endpoint, no audit log
-Model(Invoice, audit=True)     # Full audit trail (default)
+Model(Invoice, audit=True)     # Full audit trail (opt-in)
+Model(TempData, audit=False)   # No history endpoint, no audit log (default)
 ```
 
-When `audit=False`:
+When `audit=True`:
+- `/{id}/history` endpoint generated
+- All create/update/delete operations are logged
+
+When `audit=False` (default):
 - No `/{id}/history` endpoint generated
 - Operations are not logged
 
@@ -148,6 +162,45 @@ class User(BaseModel):
 FlashAPI(models=[Model(User, lookup_field="uuid")])
 ```
 
+### access
+
+Controls who can access this model's endpoints. See [Authentication docs](authentication.md) for full details.
+
+```python
+Model(Product, access="public")          # Anyone (no auth needed)
+Model(Order, access="authenticated")     # Any logged-in user
+Model(Report, access="staff")            # Staff or higher
+Model(Config, access="admin")            # Admin only
+
+# Per-operation access:
+Model(Article, access={
+    "list": "public",
+    "read": "public",
+    "create": "authenticated",
+    "update": "staff",
+    "delete": "admin",
+})
+```
+
+Without `access` (or `access=None`), the model is public (no authentication required).
+
+### scope
+
+Controls data isolation (multi-tenancy). See [Authentication docs](authentication.md#multi-tenancy-scope) for full details.
+
+```python
+Model(Eleve, scope="tenant", tenant_field="ecole_id")    # Tenant isolation
+Model(Draft, scope="owner", owner_field="user_id")       # Owner isolation
+Model(Note, scope="both", tenant_field="ecole_id", owner_field="enseignant_id")  # Both
+```
+
+| Value | Filter applied |
+|-------|---------------|
+| `None` (default) | No data isolation |
+| `"tenant"` | Records filtered by `tenant_field` |
+| `"owner"` | Records filtered by `owner_field` |
+| `"both"` | Records filtered by both fields |
+
 ### Combining options
 
 ```python
@@ -155,6 +208,8 @@ Model(AuditLog, readonly=True, plural="audit-logs")
 Model(Report, only=["list", "read"], plural="reports")
 Model(Session, soft_delete=False, audit=False)  # Ephemeral data
 Model(Article, lookup_field="slug", audit=True)  # URL by slug, with audit
+Model(Order, access="authenticated", scope="owner", owner_field="user_id")  # Auth + isolation
+Model(Eleve, soft_delete=True, audit=True, access="staff", scope="tenant", tenant_field="ecole_id")
 ```
 
 **Note:** `readonly=True` and `only=[...]` are mutually exclusive — use one or the other.
@@ -298,17 +353,20 @@ Features are controlled at two levels:
 from flashapi import Model
 
 FlashAPI(models=[
-    Model(Product, soft_delete=True, audit=True),        # Default: everything on
-    Model(LogEntry, soft_delete=False, audit=False),     # Ephemeral data
+    Model(Product, soft_delete=True, audit=True),        # Explicitly opt-in
+    Model(LogEntry, soft_delete=False, audit=False),     # Default behavior
     Model(Article, lookup_field="slug"),                  # URL by slug
+    Model(Order, access="authenticated", scope="owner", owner_field="user_id"),
 ])
 ```
 
-| Option | Default | Effect when disabled |
+| Option | Default | Effect when enabled |
 |--------|---------|---------------------|
-| `soft_delete=True` | `True` | No restore, no `?deleted=true`, DELETE is permanent |
-| `audit=True` | `True` | No `/history` endpoint, no audit log |
-| `lookup_field="id"` | `"id"` | URLs use the specified field instead of PK |
+| `soft_delete` | `False` | DELETE marks as deleted (restorable) instead of permanent removal |
+| `audit` | `False` | `/history` endpoint generated, mutations logged |
+| `lookup_field` | `"id"` | URLs use the specified field instead of PK |
+| `access` | `None` (public) | Requires authentication and checks role |
+| `scope` | `None` | Filters data by tenant/owner |
 
 ### Global (via constructor / function)
 

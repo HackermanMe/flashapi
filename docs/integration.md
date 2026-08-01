@@ -511,6 +511,7 @@ FlashAPI(
     engine=engine,            # For SQLAlchemy models: uses YOUR database.
     base_path="/api",         # URL prefix. Default: "/api".
     database="flashapi.db",   # For Pydantic/dataclass models only: SQLite file path.
+    auth_backend=MyAuth(),    # AuthBackend instance. Default: None (no auth).
     docs=True,                # Enable /docs and /redoc. Default: True.
     formatter=my_func,        # Custom response format function.
     webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
@@ -528,6 +529,7 @@ register_models(
     engine=db.engine,         # For SQLAlchemy/Flask-SQLAlchemy: uses YOUR database.
     base_path="/api",         # URL prefix. Default: "/api".
     database="flashapi.db",   # For Pydantic/dataclass models only: SQLite file path.
+    auth_backend=MyAuth(),    # AuthBackend instance. Default: None (no auth).
     docs=True,                # Enable /docs and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
     webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
@@ -543,6 +545,7 @@ generate_urls(
     models=[...],             # Required. List of model classes or Model() wrappers.
     extra_views=[...],        # URL patterns with @api_doc views (auto-discovered).
     base_path="/api",         # URL prefix. Default: "/api".
+    auth_backend=MyAuth(),    # AuthBackend instance. Default: None (no auth).
     docs=True,                # Enable /docs/ and /openapi.json. Default: True.
     formatter=my_func,        # Custom response format function.
     webhook_urls=["..."],     # Webhook target URLs. Default: [] (disabled).
@@ -566,9 +569,13 @@ Model(
     exclude=["delete"],       # Remove specific operations.
     only=["list", "read"],    # Keep ONLY these operations.
     plural="custom-name",     # Override auto-pluralization.
-    soft_delete=True,         # Soft delete on DELETE. Default: True.
-    audit=True,               # Audit trail (/history). Default: True.
+    soft_delete=False,        # Soft delete on DELETE. Default: False.
+    audit=False,              # Audit trail (/history). Default: False.
     lookup_field="id",        # Field used in URLs. Default: "id".
+    access=None,              # Access control. Default: None (public).
+    scope=None,               # Data isolation. Default: None (no filtering).
+    tenant_field=None,        # Column for tenant isolation.
+    owner_field=None,         # Column for owner isolation.
 )
 ```
 
