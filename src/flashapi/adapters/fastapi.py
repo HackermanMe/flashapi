@@ -141,6 +141,7 @@ class FlashAPI:
 
         self._register_relations()
         self._add_dashboard_routes()
+        self._add_websocket_route()
         self._add_api_root()
 
     def _prepare_model(self, model_entry) -> None:
@@ -186,6 +187,49 @@ class FlashAPI:
         @self._app.get(f"{bp}/dashboard/metrics.json", tags=["Dashboard"], name="dashboard_metrics")
         async def dashboard_metrics():
             return metrics.get_metrics(webhook)
+
+    def _add_websocket_route(self) -> None:
+        from starlette.websockets import WebSocket, WebSocketDisconnect
+        from flashapi.features.websocket import get_hub
+        import json
+
+        bp = self._base_path
+
+        class _FastAPIConnection:
+            def __init__(self, ws: WebSocket):
+                self._ws = ws
+
+            async def send_message(self, message: str):
+                await self._ws.send_text(message)
+
+            def __hash__(self):
+                return id(self._ws)
+
+            def __eq__(self, other):
+                return isinstance(other, _FastAPIConnection) and self._ws is other._ws
+
+        @self._app.websocket(f"{bp}/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            await websocket.accept()
+            hub = get_hub()
+            conn = _FastAPIConnection(websocket)
+            try:
+                while True:
+                    text = await websocket.receive_text()
+                    try:
+                        msg = json.loads(text)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    action = msg.get("action")
+                    topic = msg.get("topic", "")
+
+                    if action == "subscribe" and topic:
+                        hub.subscribe(topic, conn)
+                    elif action == "unsubscribe" and topic:
+                        hub.unsubscribe(topic, conn)
+            except WebSocketDisconnect:
+                hub.remove_connection(conn)
 
     def _add_api_root(self) -> None:
         bp = self._base_path
@@ -293,6 +337,12 @@ class FlashAPI:
         if self._auth_backend is None or user is None:
             return ""
         return self._auth_backend.get_user_identifier(user)
+
+    async def _broadcast(self, entity: str, action: str, data: dict | None = None) -> None:
+        from flashapi.features.websocket import broadcast_event_async, EVENT_MAP
+        event_type = EVENT_MAP.get(action)
+        if event_type:
+            await broadcast_event_async(entity, event_type, data)
 
     def _create_routes(self, schema: ModelSchema) -> None:
         table = schema.plural
@@ -444,6 +494,7 @@ class FlashAPI:
                 audit.record("CREATE", tag, item.get("id", ""), performed_by=self._get_performer(user))
             if webhook:
                 webhook.dispatch("CREATE", tag, item.get("id", ""), item)
+            await self._broadcast(tag, "CREATE", item)
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
@@ -488,6 +539,7 @@ class FlashAPI:
                 audit.record("UPDATE", tag, item_id, performed_by=self._get_performer(user), old_data=old_item, new_data=item)
             if webhook:
                 webhook.dispatch("UPDATE", tag, item_id, item)
+            await self._broadcast(tag, "UPDATE", item)
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
@@ -537,6 +589,7 @@ class FlashAPI:
                 audit.record("DELETE", tag, item_id, performed_by=self._get_performer(user))
             if webhook:
                 webhook.dispatch("DELETE", tag, item_id, {})
+            await self._broadcast(tag, "DELETE", {"id": str(item_id)})
 
     def _add_export_route(self, table, storage, tag, model_schema):
         bp = self._base_path

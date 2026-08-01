@@ -304,6 +304,12 @@ def _create_django_views(
             return ""
         return auth_backend.get_user_identifier(user)
 
+    def _broadcast(entity: str, action: str, data: dict | None = None):
+        from flashapi.features.websocket import broadcast_event, EVENT_MAP
+        event_type = EVENT_MAP.get(action)
+        if event_type:
+            broadcast_event(entity, event_type, data)
+
     # --- List + Create ---
     if "list" in schema.permissions or "create" in schema.permissions:
 
@@ -367,6 +373,7 @@ def _create_django_views(
                     audit_log.record("CREATE", entity_name, item.get("id", ""), performed_by=_get_performer(user))
                 if webhook:
                     webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
+                _broadcast(entity_name, "CREATE", item)
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter), status=201)
 
@@ -679,6 +686,7 @@ def _create_django_views(
                     audit_log.record("UPDATE", entity_name, item_id, performed_by=_get_performer(user), old_data=old_item, new_data=item)
                 if webhook:
                     webhook.dispatch("UPDATE", entity_name, item_id, item)
+                _broadcast(entity_name, "UPDATE", item)
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter))
 
@@ -704,6 +712,7 @@ def _create_django_views(
                     audit_log.record("DELETE", entity_name, item_id, performed_by=_get_performer(user))
                 if webhook:
                     webhook.dispatch("DELETE", entity_name, item_id, {})
+                _broadcast(entity_name, "DELETE", {"id": str(item_id)})
                 return HttpResponse(status=204)
 
             return JsonResponse(create_error_response("Method not allowed", 405), status=405)
@@ -727,6 +736,7 @@ def _create_django_views(
             restored = storage.restore(_table, item_id, lookup_field=_lookup)
             if not restored:
                 return JsonResponse(create_error_response("Not found", 404), status=404)
+            _broadcast(entity_name, "RESTORE", {"id": str(item_id)})
             return HttpResponse(status=204)
 
         if lookup_field == "id":

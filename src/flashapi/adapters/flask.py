@@ -126,6 +126,9 @@ def register_models(
     # Dashboard
     _add_dashboard_routes(blueprint, metrics, webhook)
 
+    # WebSocket
+    _add_websocket_route(app, base_path)
+
     # Rate limit middleware
     if rate_limiter:
         _add_rate_limit_middleware(app, rate_limiter)
@@ -136,6 +139,58 @@ def register_models(
     _add_api_root_route(blueprint, all_schemas, base_path, docs)
 
     app.register_blueprint(blueprint)
+
+
+def _add_websocket_route(app, base_path: str) -> None:
+    """Add WebSocket endpoint via flask-sock (optional dependency)."""
+    try:
+        from flask_sock import Sock
+    except ImportError:
+        return
+
+    import json
+    from flashapi.features.websocket import get_hub
+
+    sock = Sock(app)
+
+    class _FlaskConnection:
+        def __init__(self, ws):
+            self._ws = ws
+
+        def send_message(self, message: str):
+            self._ws.send(message)
+
+        def __hash__(self):
+            return id(self._ws)
+
+        def __eq__(self, other):
+            return isinstance(other, _FlaskConnection) and self._ws is other._ws
+
+    @sock.route(f"{base_path}/ws")
+    def websocket_endpoint(ws):
+        hub = get_hub()
+        conn = _FlaskConnection(ws)
+        try:
+            while True:
+                text = ws.receive()
+                if text is None:
+                    break
+                try:
+                    msg = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                action = msg.get("action")
+                topic = msg.get("topic", "")
+
+                if action == "subscribe" and topic:
+                    hub.subscribe(topic, conn)
+                elif action == "unsubscribe" and topic:
+                    hub.unsubscribe(topic, conn)
+        except Exception:
+            pass
+        finally:
+            hub.remove_connection(conn)
 
 
 def _add_api_root_route(blueprint, schemas: list[ModelSchema], base_path: str, docs: bool):
@@ -334,6 +389,12 @@ def _create_flask_routes(
             return ""
         return auth_backend.get_user_identifier(user)
 
+    def _broadcast(entity: str, action: str, data: dict | None = None):
+        from flashapi.features.websocket import broadcast_event, EVENT_MAP
+        event_type = EVENT_MAP.get(action)
+        if event_type:
+            broadcast_event(entity, event_type, data)
+
     if "list" in schema.permissions:
         @blueprint.route(f"/{table}", methods=["GET"], endpoint=f"{table}_list")
         def list_items(_table=table, _fields=field_names, _exp=expandable, _schema=model_schema,
@@ -433,6 +494,7 @@ def _create_flask_routes(
                 _audit.record("CREATE", entity_name, item.get("id", ""), performed_by=_get_performer(user))
             if _webhook:
                 _webhook.dispatch("CREATE", entity_name, item.get("id", ""), item)
+            _broadcast(entity_name, "CREATE", item)
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter)), 201
 
@@ -466,6 +528,7 @@ def _create_flask_routes(
                 _audit.record("UPDATE", entity_name, item_id, performed_by=_get_performer(user), old_data=old_item, new_data=item)
             if _webhook:
                 _webhook.dispatch("UPDATE", entity_name, item_id, item)
+            _broadcast(entity_name, "UPDATE", item)
             item = filter_response(item, _schema)
             return jsonify(create_item_response(item, formatter))
 
@@ -494,6 +557,7 @@ def _create_flask_routes(
                 _audit.record("DELETE", entity_name, item_id, performed_by=_get_performer(user))
             if _webhook:
                 _webhook.dispatch("DELETE", entity_name, item_id, {})
+            _broadcast(entity_name, "DELETE", {"id": str(item_id)})
             return "", 204
 
         if supports_soft_delete:
@@ -506,6 +570,7 @@ def _create_flask_routes(
                 restored = storage.restore(_table, item_id, lookup_field=_lf)
                 if not restored:
                     return jsonify(create_error_response("Not found", 404)), 404
+                _broadcast(entity_name, "RESTORE", {"id": str(item_id)})
                 return "", 204
 
     if "create" in schema.permissions:
