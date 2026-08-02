@@ -6,6 +6,9 @@ dist/
 build/
 .venv/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 .pytest_cache/
 docs/ecosystem-spec.md
 docs/ecosystem-spec.md
