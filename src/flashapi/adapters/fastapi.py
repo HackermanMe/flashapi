@@ -1,22 +1,22 @@
-from typing import Any, Callable, Optional
-from datetime import date, datetime, time
 import uuid
+from collections.abc import Callable
+from datetime import date, datetime, time
+from typing import Any
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, create_model
 
-from flashapi.core.schema import Model, ModelSchema, FieldType
-from flashapi.core.response import create_list_response, create_item_response, create_error_response
-from flashapi.core.relations import resolve_relations, find_expandable_fields
-from flashapi.core.visibility import filter_response, writable_fields, export_fields
-from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
-from flashapi.features.export import EXPORTERS, CONTENT_TYPES
-from flashapi.features.dashboard import MetricsCollector, DASHBOARD_HTML
+from flashapi.core.relations import find_expandable_fields, resolve_relations
+from flashapi.core.response import create_error_response, create_item_response, create_list_response
+from flashapi.core.schema import FieldType, Model, ModelSchema
+from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
+from flashapi.features.dashboard import DASHBOARD_HTML, MetricsCollector
+from flashapi.features.export import CONTENT_TYPES, EXPORTERS
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
 from flashapi.storage.sqlalchemy import SQLAlchemyStorage
-
 
 DEFAULT_BASE_PATH = "/api"
 
@@ -58,7 +58,7 @@ def _build_pydantic_model(schema: ModelSchema, *, all_optional: bool = False) ->
         if f.required and not all_optional:
             fields[f.name] = (python_type, ...)
         else:
-            fields[f.name] = (Optional[python_type], None)
+            fields[f.name] = (python_type | None, None)
     suffix = "Update" if all_optional else "Create"
     return create_model(f"{schema.name}{suffix}", **fields)
 
@@ -74,13 +74,13 @@ class FlashAPI:
         base_path: str = DEFAULT_BASE_PATH,
         database: str = "flashapi.db",
         docs: bool = True,
-        formatter: Optional[Callable] = None,
+        formatter: Callable | None = None,
         audit: bool = True,
-        webhook_urls: Optional[list[str]] = None,
-        rate_limit: Optional[int] = None,
+        webhook_urls: list[str] | None = None,
+        rate_limit: int | None = None,
         rate_window: int = 60,
         auth_backend=None,
-    ):
+    ) -> None:
         self._app = FastAPI(
             title="FlashAPI",
             description="Define your models. FlashAPI does the rest.",
@@ -145,10 +145,7 @@ class FlashAPI:
         self._add_api_root()
 
     def _prepare_model(self, model_entry) -> None:
-        if isinstance(model_entry, Model):
-            wrapper = model_entry
-        else:
-            wrapper = Model(model_entry)
+        wrapper = model_entry if isinstance(model_entry, Model) else Model(model_entry)
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
@@ -189,17 +186,19 @@ class FlashAPI:
             return metrics.get_metrics(webhook)
 
     def _add_websocket_route(self) -> None:
-        from starlette.websockets import WebSocket, WebSocketDisconnect
-        from flashapi.features.websocket import get_hub
         import json
+
+        from starlette.websockets import WebSocket, WebSocketDisconnect
+
+        from flashapi.features.websocket import get_hub
 
         bp = self._base_path
 
         class _FastAPIConnection:
-            def __init__(self, ws: WebSocket):
+            def __init__(self, ws: WebSocket) -> None:
                 self._ws = ws
 
-            async def send_message(self, message: str):
+            async def send_message(self, message: str) -> None:
                 await self._ws.send_text(message)
 
             def __hash__(self):
@@ -209,7 +208,7 @@ class FlashAPI:
                 return isinstance(other, _FastAPIConnection) and self._ws is other._ws
 
         @self._app.websocket(f"{bp}/ws")
-        async def websocket_endpoint(websocket: WebSocket):
+        async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
             hub = get_hub()
             conn = _FastAPIConnection(websocket)
@@ -293,7 +292,7 @@ class FlashAPI:
 
     def _check_auth(self, request: Request, operation: str, schema: ModelSchema):
         """Returns (user, role, error_response). error_response is None if access granted."""
-        from flashapi.features.auth import check_access, get_scope_filter
+        from flashapi.features.auth import check_access
 
         if self._auth_backend is None:
             return None, "admin", None
@@ -339,7 +338,7 @@ class FlashAPI:
         return self._auth_backend.get_user_identifier(user)
 
     async def _broadcast(self, entity: str, action: str, data: dict | None = None) -> None:
-        from flashapi.features.websocket import broadcast_event_async, EVENT_MAP
+        from flashapi.features.websocket import EVENT_MAP, broadcast_event_async
         event_type = EVENT_MAP.get(action)
         if event_type:
             await broadcast_event_async(entity, event_type, data)
@@ -380,7 +379,7 @@ class FlashAPI:
             self._add_delete_route(table, storage, schema.name, lookup_field)
             self._add_bulk_delete_route(table, storage, schema.name, model_schema, lookup_field)
 
-    def _add_list_route(self, table, field_names, formatter, storage, tag, expandable, model_schema):
+    def _add_list_route(self, table, field_names, formatter, storage, tag, expandable, model_schema) -> None:
         bp = self._base_path
         metrics = self._metrics
         supports_soft_delete = model_schema.soft_delete
@@ -390,9 +389,9 @@ class FlashAPI:
             request: Request,
             page: int = Query(0, ge=0),
             size: int = Query(20, ge=1, le=100),
-            sort: Optional[str] = None,
-            search: Optional[str] = None,
-            expand: Optional[str] = None,
+            sort: str | None = None,
+            search: str | None = None,
+            expand: str | None = None,
             deleted: bool = False,
         ):
             user, role, err = self._check_auth(request, "list", model_schema)
@@ -421,12 +420,12 @@ class FlashAPI:
             page_items = [filter_response(item, model_schema) for item in page_items]
             return create_list_response(page_items, total, page, size, formatter)
 
-    def _add_read_route(self, table, formatter, storage, tag, expandable, model_schema, lookup_field="id"):
+    def _add_read_route(self, table, formatter, storage, tag, expandable, model_schema, lookup_field="id") -> None:
         bp = self._base_path
         lf = lookup_field
 
         @self._app.get(f"{bp}/{table}/{{item_id}}", tags=[tag], name=f"{table}_read")
-        async def route(request: Request, item_id: str, expand: Optional[str] = None):
+        async def route(request: Request, item_id: str, expand: str | None = None):
             user, role, err = self._check_auth(request, "read", model_schema)
             if err:
                 return err
@@ -452,7 +451,7 @@ class FlashAPI:
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_history_route(self, table, entity_name, lookup_field="id", model_schema=None):
+    def _add_history_route(self, table, entity_name, lookup_field="id", model_schema=None) -> None:
         bp = self._base_path
         audit = self._audit
         _schema = model_schema
@@ -460,7 +459,7 @@ class FlashAPI:
         @self._app.get(f"{bp}/{table}/{{item_id}}/history", tags=[entity_name], name=f"{table}_history")
         async def route(request: Request, item_id: str):
             if _schema:
-                user, role, err = self._check_auth(request, "read", _schema)
+                _user, _role, err = self._check_auth(request, "read", _schema)
                 if err:
                     return err
 
@@ -469,7 +468,7 @@ class FlashAPI:
             history = audit.get_history(entity_name, item_id)
             return {"data": history}
 
-    def _add_create_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema):
+    def _add_create_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema) -> None:
         bp = self._base_path
         audit = self._audit
         webhook = self._webhook
@@ -498,7 +497,7 @@ class FlashAPI:
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_update_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema, lookup_field="id"):
+    def _add_update_route(self, table, input_fields, formatter, storage, tag, body_model, model_schema, lookup_field="id") -> None:
         bp = self._base_path
         audit = self._audit
         webhook = self._webhook
@@ -543,7 +542,7 @@ class FlashAPI:
             item = filter_response(item, model_schema)
             return create_item_response(item, formatter)
 
-    def _add_delete_route(self, table, storage, tag, lookup_field="id"):
+    def _add_delete_route(self, table, storage, tag, lookup_field="id") -> None:
         bp = self._base_path
         audit = self._audit
         webhook = self._webhook
@@ -590,8 +589,9 @@ class FlashAPI:
             if webhook:
                 webhook.dispatch("DELETE", tag, item_id, {})
             await self._broadcast(tag, "DELETE", {"id": str(item_id)})
+            return None
 
-    def _add_export_route(self, table, storage, tag, model_schema):
+    def _add_export_route(self, table, storage, tag, model_schema) -> None:
         bp = self._base_path
 
         @self._app.get(f"{bp}/{table}/export", tags=[tag], name=f"{table}_export")
@@ -626,7 +626,7 @@ class FlashAPI:
                 content = EXPORTERS[fmt](items, export_cols)
             except ImportError as e:
                 return JSONResponse(
-                    content=create_error_response(str(e), 400), status_code=400
+                    content=create_error_response(str(e), 400), status_code=400,
                 )
             return Response(
                 content=content,
@@ -634,7 +634,7 @@ class FlashAPI:
                 headers={"Content-Disposition": f'attachment; filename="{table}.{fmt}"'},
             )
 
-    def _add_bulk_create_route(self, table, input_fields, formatter, storage, tag, model_schema):
+    def _add_bulk_create_route(self, table, input_fields, formatter, storage, tag, model_schema) -> None:
         bp = self._base_path
 
         @self._app.post(f"{bp}/{table}/bulk", status_code=201, tags=[tag], name=f"{table}_bulk_create")
@@ -670,7 +670,7 @@ class FlashAPI:
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 
-    def _add_bulk_update_route(self, table, input_fields, formatter, storage, tag, model_schema, lookup_field):
+    def _add_bulk_update_route(self, table, input_fields, formatter, storage, tag, model_schema, lookup_field) -> None:
         bp = self._base_path
         lf = lookup_field
 
@@ -720,7 +720,7 @@ class FlashAPI:
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 
-    def _add_bulk_delete_route(self, table, storage, tag, model_schema, lookup_field):
+    def _add_bulk_delete_route(self, table, storage, tag, model_schema, lookup_field) -> None:
         bp = self._base_path
         lf = lookup_field
         soft = model_schema.soft_delete if model_schema else False
@@ -763,7 +763,7 @@ class FlashAPI:
                 "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
             }
 
-    def _add_restore_route(self, table, storage, tag, lookup_field="id", model_schema=None):
+    def _add_restore_route(self, table, storage, tag, lookup_field="id", model_schema=None) -> None:
         bp = self._base_path
         lf = lookup_field
         _schema = model_schema
@@ -771,7 +771,7 @@ class FlashAPI:
         @self._app.post(f"{bp}/{table}/{{item_id}}/restore", status_code=204, tags=[tag], name=f"{table}_restore")
         async def route(request: Request, item_id: str):
             if _schema:
-                user, role, err = self._check_auth(request, "delete", _schema)
+                _user, _role, err = self._check_auth(request, "delete", _schema)
                 if err:
                     return err
 
@@ -782,8 +782,9 @@ class FlashAPI:
                     status_code=404,
                     content=create_error_response("Not found", 404),
                 )
+            return None
 
-    def _add_nested_list_route(self, parent_plural, child_plural, foreign_key, parent_storage, child_storage, formatter):
+    def _add_nested_list_route(self, parent_plural, child_plural, foreign_key, parent_storage, child_storage, formatter) -> None:
         bp = self._base_path
 
         @self._app.get(
@@ -795,8 +796,8 @@ class FlashAPI:
             parent_id: int,
             page: int = Query(0, ge=0),
             size: int = Query(20, ge=1, le=100),
-            sort: Optional[str] = None,
-            search: Optional[str] = None,
+            sort: str | None = None,
+            search: str | None = None,
         ):
             parent = parent_storage.get(parent_plural, parent_id)
             if parent is None:
@@ -808,7 +809,7 @@ class FlashAPI:
             all_items = child_storage.list_all(child_plural)
             items = [i for i in all_items if i.get(foreign_key) == parent_id]
 
-            child_fields = {k for item in items for k in item.keys() if k != "id"}
+            child_fields = {k for item in items for k in item if k != "id"}
             if search:
                 items = apply_search(items, search, child_fields)
             if sort:
@@ -873,6 +874,6 @@ class FlashAPI:
     def app(self):
         return self._app
 
-    def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs):
+    def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs) -> None:
         import uvicorn
         uvicorn.run(self._app, host=host, port=port, **kwargs)
