@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from flashapi.core.schema import ModelSchema
+if TYPE_CHECKING:
+    from flashapi.core.schema import ModelSchema
 
 
 class Inspector(ABC):

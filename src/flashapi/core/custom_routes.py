@@ -14,7 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 TYPE_MAP = {
     "string": {"type": "string"},
     "str": {"type": "string"},
@@ -51,6 +50,7 @@ def api_doc(
         body_required: List of required field names in body.
         params: Query parameters as {name: type}.
         response: Response schema (raw OpenAPI schema dict).
+
     """
     def decorator(func):
         func._flashapi_doc = {
@@ -83,13 +83,13 @@ def _build_openapi_operation(doc: dict, method: str) -> dict[str, Any]:
         "tags": [doc["tag"]],
         "summary": doc["summary"] or f"{method.upper()} endpoint",
         "responses": {
-            "200": {"description": "Success"}
+            "200": {"description": "Success"},
         },
     }
 
     if doc.get("response"):
         operation["responses"]["200"]["content"] = {
-            "application/json": {"schema": doc["response"]}
+            "application/json": {"schema": doc["response"]},
         }
 
     if doc.get("params"):
@@ -224,13 +224,13 @@ def custom_routes_to_openapi_paths(routes: list[CustomRoute], trailing_slash: bo
             "tags": [route.tag],
             "summary": route.summary or f"{route.method.upper()} {route.path}",
             "responses": {
-                "200": {"description": route.response_description}
+                "200": {"description": route.response_description},
             },
         }
 
         if route.response_schema:
             operation["responses"]["200"]["content"] = {
-                "application/json": {"schema": route.response_schema}
+                "application/json": {"schema": route.response_schema},
             }
 
         if route.parameters:

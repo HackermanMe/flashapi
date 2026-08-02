@@ -6,8 +6,7 @@ from flashapi.core.schema import ModelSchema, RelationSchema
 
 
 def resolve_relations(schemas: list[ModelSchema]) -> dict[str, list[RelationSchema]]:
-    """
-    Detect relations between models based on field names ending with _id.
+    """Detect relations between models based on field names ending with _id.
     Returns a mapping: parent_plural -> list of child relations.
 
     Example: Book has author_id → Author is parent, Book is child.
@@ -49,8 +48,7 @@ def resolve_relations(schemas: list[ModelSchema]) -> dict[str, list[RelationSche
 
 
 def find_expandable_fields(schema: ModelSchema) -> dict[str, str]:
-    """
-    Return a mapping of expandable field names to their target plural.
+    """Return a mapping of expandable field names to their target plural.
     Example: {"author": "authors"} for a Book model with author_id.
     """
     expandable = {}

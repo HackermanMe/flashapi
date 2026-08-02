@@ -26,14 +26,15 @@ def _validate_identifier(name: str) -> str:
     """Validate and quote a SQL identifier to prevent injection."""
     import re
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
+        msg = f"Invalid SQL identifier: {name!r}"
+        raise ValueError(msg)
     return f'"{name}"'
 
 
 class AutoStorage(Storage):
     """SQLite-backed automatic storage with soft-delete support."""
 
-    def __init__(self, database: str = "flashapi.db"):
+    def __init__(self, database: str = "flashapi.db") -> None:
         self._db_path = database
         self._conn = sqlite3.connect(database, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -69,9 +70,9 @@ class AutoStorage(Storage):
         import uuid
         if auto_type == "uuid":
             return str(uuid.uuid4())
-        elif auto_type == "datetime":
+        if auto_type == "datetime":
             return datetime.now(timezone.utc).isoformat()
-        elif auto_type == "date":
+        if auto_type == "date":
             return datetime.now(timezone.utc).date().isoformat()
         return None
 
@@ -82,13 +83,13 @@ class AutoStorage(Storage):
                 data[field_name] = self._generate_auto_value(auto_type)
 
         safe_table = _validate_identifier(table)
-        columns = [_validate_identifier(k) for k in data.keys()]
+        columns = [_validate_identifier(k) for k in data]
         placeholders = ", ".join(["?"] * len(columns))
         col_names = ", ".join(columns)
         values = list(data.values())
 
         cursor = self._conn.execute(
-            f"INSERT INTO {safe_table} ({col_names}) VALUES ({placeholders})", values
+            f"INSERT INTO {safe_table} ({col_names}) VALUES ({placeholders})", values,
         )
         self._conn.commit()
 
@@ -117,11 +118,11 @@ class AutoStorage(Storage):
         if table in self._soft_delete_tables:
             if only_deleted:
                 cursor = self._conn.execute(
-                    f"SELECT * FROM {safe_table} WHERE deleted_at IS NOT NULL"
+                    f"SELECT * FROM {safe_table} WHERE deleted_at IS NOT NULL",
                 )
             elif not include_deleted:
                 cursor = self._conn.execute(
-                    f"SELECT * FROM {safe_table} WHERE deleted_at IS NULL"
+                    f"SELECT * FROM {safe_table} WHERE deleted_at IS NULL",
                 )
             else:
                 cursor = self._conn.execute(f"SELECT * FROM {safe_table}")
@@ -135,8 +136,8 @@ class AutoStorage(Storage):
 
         safe_table = _validate_identifier(table)
         safe_field = _validate_identifier(lookup_field)
-        set_clause = ", ".join([f"{_validate_identifier(k)} = ?" for k in data.keys()])
-        values = list(data.values()) + [item_id]
+        set_clause = ", ".join([f"{_validate_identifier(k)} = ?" for k in data])
+        values = [*list(data.values()), item_id]
 
         self._conn.execute(f"UPDATE {safe_table} SET {set_clause} WHERE {safe_field} = ?", values)
         self._conn.commit()
@@ -154,7 +155,7 @@ class AutoStorage(Storage):
         if soft and table in self._soft_delete_tables:
             now = datetime.now(timezone.utc).isoformat()
             self._conn.execute(
-                f"UPDATE {safe_table} SET deleted_at = ? WHERE {safe_field} = ?", (now, item_id)
+                f"UPDATE {safe_table} SET deleted_at = ? WHERE {safe_field} = ?", (now, item_id),
             )
         else:
             self._conn.execute(f"DELETE FROM {safe_table} WHERE {safe_field} = ?", (item_id,))
@@ -171,7 +172,7 @@ class AutoStorage(Storage):
         safe_table = _validate_identifier(table)
         safe_field = _validate_identifier(lookup_field)
         self._conn.execute(
-            f"UPDATE {safe_table} SET deleted_at = NULL WHERE {safe_field} = ?", (item_id,)
+            f"UPDATE {safe_table} SET deleted_at = NULL WHERE {safe_field} = ?", (item_id,),
         )
         self._conn.commit()
         return True

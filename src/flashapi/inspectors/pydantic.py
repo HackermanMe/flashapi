@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, get_origin, get_args
+from typing import Any, get_args, get_origin
 from uuid import UUID
 
-from flashapi.core.schema import FieldSchema, FieldType, ModelSchema
 from flashapi.core.pluralize import pluralize
+from flashapi.core.schema import FieldSchema, FieldType, ModelSchema
 from flashapi.inspectors.base import Inspector
 
 TYPE_MAP: dict[type, FieldType] = {
@@ -30,7 +30,8 @@ class PydanticInspector(Inspector):
         from pydantic import BaseModel
 
         if not issubclass(model_class, BaseModel):
-            raise TypeError(f"{model_class} is not a Pydantic model")
+            msg = f"{model_class} is not a Pydantic model"
+            raise TypeError(msg)
 
         fields: list[FieldSchema] = []
         fields.append(FieldSchema(name="id", type=FieldType.INTEGER, required=False, primary_key=True, auto_generated=True))

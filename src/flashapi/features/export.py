@@ -23,10 +23,11 @@ def export_csv(items: list[dict[str, Any]], fields: list[str]) -> bytes:
 def export_xlsx(items: list[dict[str, Any]], fields: list[str]) -> bytes:
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
     except ImportError:
-        raise ImportError("openpyxl is required for XLSX export: pip install openpyxl")
+        msg = "openpyxl is required for XLSX export: pip install openpyxl"
+        raise ImportError(msg)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -71,13 +72,14 @@ def export_xlsx(items: list[dict[str, Any]], fields: list[str]) -> bytes:
 
 def export_pdf(items: list[dict[str, Any]], fields: list[str]) -> bytes:
     try:
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
         from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib.styles import getSampleStyleSheet
         from reportlab.lib.units import mm
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError:
-        raise ImportError("reportlab is required for PDF export: pip install reportlab")
+        msg = "reportlab is required for PDF export: pip install reportlab"
+        raise ImportError(msg)
 
     output = io.BytesIO()
     page_size = landscape(A4)

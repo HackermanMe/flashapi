@@ -17,7 +17,7 @@ class WebhookDispatcher:
         *,
         retry_count: int = 3,
         timeout: int = 10,
-    ):
+    ) -> None:
         self._urls = urls
         self._retry_count = retry_count
         self._timeout = timeout

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from flashapi.core.schema import ModelSchema
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from flashapi.core.schema import ModelSchema
 
 
 def response_fields(schema: ModelSchema) -> set[str]:

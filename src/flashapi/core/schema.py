@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 
 
 class FieldType(Enum):
@@ -50,12 +50,12 @@ class ModelSchema:
     plural: str
     fields: list[FieldSchema]
     permissions: list[str] = field(
-        default_factory=lambda: ["list", "read", "create", "update", "delete"]
+        default_factory=lambda: ["list", "read", "create", "update", "delete"],
     )
     soft_delete: bool = False
     audit: bool = False
     lookup_field: str = "id"
-    access: Union[str, dict, bool, None] = None
+    access: str | dict | bool | None = None
     scope: str | None = None  # "tenant", "owner", or "both"
     tenant_field: str | None = None
     owner_field: str | None = None
@@ -79,18 +79,24 @@ def validate_soft_delete(model_class: type, soft_delete: bool) -> None:
         try:
             model_class._meta.get_field(SOFT_DELETE_FIELD)
         except Exception:
-            raise FlashAPIConfigError(
+            msg = (
                 f'Model "{model_class.__name__}" has soft_delete=True but no '
                 f"'{SOFT_DELETE_FIELD}' field. Add:\n"
                 f"    {SOFT_DELETE_FIELD} = models.DateTimeField(null=True, blank=True)"
             )
+            raise FlashAPIConfigError(
+                msg,
+            )
     elif hasattr(model_class, "__table__"):
         columns = {col.name for col in model_class.__table__.columns}
         if SOFT_DELETE_FIELD not in columns:
-            raise FlashAPIConfigError(
+            msg = (
                 f'Model "{model_class.__name__}" has soft_delete=True but no '
                 f"'{SOFT_DELETE_FIELD}' column. Add:\n"
                 f"    {SOFT_DELETE_FIELD} = Column(DateTime, nullable=True)"
+            )
+            raise FlashAPIConfigError(
+                msg,
             )
 
 
@@ -112,7 +118,7 @@ class Model:
         scope: str | None = None,
         tenant_field: str | None = None,
         owner_field: str | None = None,
-    ):
+    ) -> None:
         self.model_class = model_class
         self.plural = plural
         self.soft_delete = soft_delete

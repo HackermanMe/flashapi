@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING
 
-from flashapi.core.schema import Model, ModelSchema
-from flashapi.core.response import create_list_response, create_item_response, create_error_response
 from flashapi.core.custom_routes import (
-    CustomRoute, custom_routes_to_openapi_paths, discover_django_views,
+    CustomRoute,
+    custom_routes_to_openapi_paths,
+    discover_django_views,
 )
-from flashapi.core.visibility import filter_response, writable_fields, export_fields
-from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
+from flashapi.core.response import create_error_response, create_item_response, create_list_response
+from flashapi.core.schema import Model, ModelSchema
+from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
+from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.inspectors import inspect_model
 from flashapi.storage.orm import DjangoORMStorage
-from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 DEFAULT_BASE_PATH = "/api"
 
@@ -31,7 +35,6 @@ def generate_urls(
     auth_backend=None,
 ):
     """Generate Django URL patterns for the given models (spec v1 compliant)."""
-
     urlpatterns = []
     all_schemas: list[ModelSchema] = []
 
@@ -63,10 +66,7 @@ def generate_urls(
         pass
 
     for model_entry in models:
-        if isinstance(model_entry, Model):
-            wrapper = model_entry
-        else:
-            wrapper = Model(model_entry)
+        wrapper = model_entry if isinstance(model_entry, Model) else Model(model_entry)
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
@@ -118,8 +118,8 @@ def generate_urls(
 
 
 def _create_api_root_view(schemas: list[ModelSchema], docs: bool):
-    from django.urls import path
     from django.http import JsonResponse
+    from django.urls import path
 
     def api_root(request):
         resources = {}
@@ -138,7 +138,7 @@ def _create_api_root_view(schemas: list[ModelSchema], docs: bool):
     return [path("", api_root, name="flashapi_root")]
 
 
-def _register_rate_limit_middleware(rate_limiter):
+def _register_rate_limit_middleware(rate_limiter) -> None:
     """Store rate_limiter globally for FlashAPIRateLimitMiddleware to pick up."""
     global _RATE_LIMITER
     _RATE_LIMITER = rate_limiter
@@ -150,7 +150,7 @@ _RATE_LIMITER = None
 class FlashAPIRateLimitMiddleware:
     """Django middleware for rate limiting. Add 'flashapi.adapters.django.FlashAPIRateLimitMiddleware' to MIDDLEWARE."""
 
-    def __init__(self, get_response):
+    def __init__(self, get_response) -> None:
         self.get_response = get_response
 
     def __call__(self, request):
@@ -186,8 +186,9 @@ class FlashAPIRateLimitMiddleware:
 
 
 def _create_dashboard_views(metrics, webhook):
+    from django.http import HttpResponse, JsonResponse
     from django.urls import path
-    from django.http import JsonResponse, HttpResponse
+
     from flashapi.features.dashboard import DASHBOARD_HTML
 
     def dashboard_html(request):
@@ -203,8 +204,8 @@ def _create_dashboard_views(metrics, webhook):
 
 
 def _create_docs_views(schemas: list[ModelSchema], custom_routes: list[CustomRoute], extra_views: list):
+    from django.http import HttpResponse, JsonResponse
     from django.urls import path
-    from django.http import JsonResponse, HttpResponse
 
     openapi_spec = generate_openapi_schema(schemas, trailing_slash=True)
 
@@ -244,10 +245,12 @@ def _create_django_views(
     metrics=None,
     auth_backend=None,
 ):
-    from django.urls import path
-    from django.http import JsonResponse, HttpResponse
-    from django.views.decorators.csrf import csrf_exempt
     import json
+
+    from django.http import HttpResponse, JsonResponse
+    from django.urls import path
+    from django.views.decorators.csrf import csrf_exempt
+
     from flashapi.features.auth import check_access, get_scope_filter
 
     table = schema.plural
@@ -283,13 +286,13 @@ def _create_django_views(
                 if op_access == "public":
                     return None, "public", None
             return None, "public", JsonResponse(
-                create_error_response("Authentication required", 401), status=401
+                create_error_response("Authentication required", 401), status=401,
             )
 
         role = auth_backend.get_role(user)
         if not check_access(role, model_access, operation):
             return user, role, JsonResponse(
-                create_error_response("Forbidden", 403), status=403
+                create_error_response("Forbidden", 403), status=403,
             )
         return user, role, None
 
@@ -304,8 +307,8 @@ def _create_django_views(
             return ""
         return auth_backend.get_user_identifier(user)
 
-    def _broadcast(entity: str, action: str, data: dict | None = None):
-        from flashapi.features.websocket import broadcast_event, EVENT_MAP
+    def _broadcast(entity: str, action: str, data: dict | None = None) -> None:
+        from flashapi.features.websocket import EVENT_MAP, broadcast_event
         event_type = EVENT_MAP.get(action)
         if event_type:
             broadcast_event(entity, event_type, data)
@@ -348,10 +351,10 @@ def _create_django_views(
                 if metrics:
                     metrics.record("READ", entity_name)
                 return JsonResponse(
-                    create_list_response(page_items, total, page, size, formatter)
+                    create_list_response(page_items, total, page, size, formatter),
                 )
 
-            elif request.method == "POST" and "create" in _schema.permissions:
+            if request.method == "POST" and "create" in _schema.permissions:
                 user, role, err = _check_auth(request, "create")
                 if err:
                     return err
@@ -422,7 +425,7 @@ def _create_django_views(
         def bulk_view(request, _table=table, _input=input_fields, _schema=schema, _lf=lookup_field):
             if request.method == "POST":
                 return bulk_create_view(request)
-            elif request.method == "PUT":
+            if request.method == "PUT":
                 user, role, err = _check_auth(request, "update")
                 if err:
                     return err
@@ -466,7 +469,7 @@ def _create_django_views(
                     "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
                 }, status=200)
 
-            elif request.method == "DELETE":
+            if request.method == "DELETE":
                 user, role, err = _check_auth(request, "delete")
                 if err:
                     return err
@@ -552,7 +555,7 @@ def _create_django_views(
                     "meta": {"total": len(body), "succeeded": succeeded, "failed": failed},
                 }, status=200)
 
-            elif request.method == "DELETE" and "delete" in schema.permissions:
+            if request.method == "DELETE" and "delete" in schema.permissions:
                 user, role, err = _check_auth(request, "delete")
                 if err:
                     return err
@@ -594,7 +597,7 @@ def _create_django_views(
 
     # --- Export ---
     if "list" in schema.permissions:
-        from flashapi.features.export import EXPORTERS, CONTENT_TYPES
+        from flashapi.features.export import CONTENT_TYPES, EXPORTERS
 
         def export_view(request, _table=table, _schema=schema):
             if request.method != "GET":
@@ -607,7 +610,7 @@ def _create_django_views(
             fmt = request.GET.get("format", "csv").lower()
             if fmt not in EXPORTERS:
                 return JsonResponse(
-                    create_error_response(f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400), status=400
+                    create_error_response(f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400), status=400,
                 )
             items = storage.list_all(_table)
 
@@ -621,7 +624,7 @@ def _create_django_views(
                 fields = [f for f in requested.split(",") if f in all_fields]
                 if not fields:
                     return JsonResponse(
-                        create_error_response(f"No valid fields. Available: {', '.join(all_fields)}", 400), status=400
+                        create_error_response(f"No valid fields. Available: {', '.join(all_fields)}", 400), status=400,
                     )
             else:
                 fields = all_fields
@@ -629,7 +632,7 @@ def _create_django_views(
                 content = EXPORTERS[fmt](items, fields)
             except ImportError as e:
                 return JsonResponse(
-                    create_error_response(str(e), 400), status=400
+                    create_error_response(str(e), 400), status=400,
                 )
             response = HttpResponse(content, content_type=CONTENT_TYPES[fmt])
             response["Content-Disposition"] = f'attachment; filename="{_table}.{fmt}"'
@@ -658,7 +661,7 @@ def _create_django_views(
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter))
 
-            elif request.method == "PUT" and "update" in _schema.permissions:
+            if request.method == "PUT" and "update" in _schema.permissions:
                 user, role, err = _check_auth(request, "update")
                 if err:
                     return err
@@ -690,7 +693,7 @@ def _create_django_views(
                 item = filter_response(item, _schema)
                 return JsonResponse(create_item_response(item, formatter))
 
-            elif request.method == "DELETE" and "delete" in _schema.permissions:
+            if request.method == "DELETE" and "delete" in _schema.permissions:
                 user, role, err = _check_auth(request, "delete")
                 if err:
                     return err
@@ -729,7 +732,7 @@ def _create_django_views(
             if request.method != "POST":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
 
-            user, role, err = _check_auth(request, "delete")
+            _user, _role, err = _check_auth(request, "delete")
             if err:
                 return err
 
@@ -751,7 +754,7 @@ def _create_django_views(
             if request.method != "GET":
                 return JsonResponse(create_error_response("Method not allowed", 405), status=405)
 
-            user, role, err = _check_auth(request, "read")
+            _user, _role, err = _check_auth(request, "read")
             if err:
                 return err
 

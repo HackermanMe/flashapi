@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from flashapi.core.schema import FieldSchema, FieldType, ModelSchema, RelationSchema
 from flashapi.core.pluralize import pluralize
+from flashapi.core.schema import FieldSchema, FieldType, ModelSchema, RelationSchema
 from flashapi.inspectors.base import Inspector
 
 

@@ -78,6 +78,7 @@ def check_access(user_role: str, required_access: str | dict | bool | None, oper
 
     Returns:
         True if access is granted, False otherwise.
+
     """
     if required_access is None or required_access is True or required_access == "public":
         return True
@@ -91,7 +92,7 @@ def check_access(user_role: str, required_access: str | dict | bool | None, oper
 
     if isinstance(required_access, str):
         if required_access not in ROLE_HIERARCHY:
-            return user_role == required_access or user_role == "admin"
+            return user_role in (required_access, "admin")
         required_level = ROLE_HIERARCHY.index(required_access)
         if user_role not in ROLE_HIERARCHY:
             return False
@@ -130,4 +131,4 @@ def get_scope_filter(
         if owner_id is not None and owner_field:
             filters[owner_field] = owner_id
 
-    return filters if filters else None
+    return filters or None

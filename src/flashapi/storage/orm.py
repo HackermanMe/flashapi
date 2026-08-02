@@ -11,7 +11,7 @@ SOFT_DELETE_FIELD = "deleted_at"
 class DjangoORMStorage(Storage):
     """Storage backend that delegates to Django's ORM."""
 
-    def __init__(self, model_class: type):
+    def __init__(self, model_class: type) -> None:
         self._model = model_class
         self._has_deleted_at = self._check_has_field(SOFT_DELETE_FIELD)
 
@@ -99,9 +99,9 @@ class DjangoORMStorage(Storage):
         return data
 
     def _serialize_value(self, value) -> Any:
+        import uuid
         from datetime import date, datetime, time
         from decimal import Decimal
-        import uuid
 
         if value is None:
             return None

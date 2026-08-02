@@ -9,7 +9,7 @@ from collections import defaultdict
 class RateLimiter:
     """Simple in-memory rate limiter (per-IP, sliding window)."""
 
-    def __init__(self, limit: int = 100, window: int = 60):
+    def __init__(self, limit: int = 100, window: int = 60) -> None:
         self._limit = limit
         self._window = window
         self._requests: dict[str, list[float]] = defaultdict(list)

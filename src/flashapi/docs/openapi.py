@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from flashapi.core.schema import ModelSchema, FieldType
+from flashapi.core.schema import FieldType, ModelSchema
 
 FIELD_TYPE_TO_OPENAPI = {
     FieldType.STRING: {"type": "string"},
@@ -140,10 +140,10 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                         "properties": {
                             "data": {"type": "array", "items": {"$ref": f"#/components/schemas/{schema.name}"}},
                             "meta": {"type": "object"},
-                        }
-                    }}}
-                }
-            }
+                        },
+                    }}},
+                },
+            },
         }
 
     if "create" in schema.permissions:
@@ -152,17 +152,17 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "summary": f"Create a {schema.name.lower()}",
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}}
+                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}},
             },
             "responses": {
                 "201": {
                     "description": "Created",
                     "content": {"application/json": {"schema": {
                         "type": "object",
-                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}}
-                    }}}
-                }
-            }
+                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}},
+                    }}},
+                },
+            },
         }
 
     if "read" in schema.permissions:
@@ -178,11 +178,11 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                     "description": "Item detail",
                     "content": {"application/json": {"schema": {
                         "type": "object",
-                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}}
-                    }}}
+                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}},
+                    }}},
                 },
-                "404": {"description": "Not found"}
-            }
+                "404": {"description": "Not found"},
+            },
         }
 
     if "update" in schema.permissions:
@@ -190,22 +190,22 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"Update a {schema.name.lower()}",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
+                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema},
             ],
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}}
+                "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema.name}Create"}}},
             },
             "responses": {
                 "200": {
                     "description": "Updated",
                     "content": {"application/json": {"schema": {
                         "type": "object",
-                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}}
-                    }}}
+                        "properties": {"data": {"$ref": f"#/components/schemas/{schema.name}"}},
+                    }}},
                 },
-                "404": {"description": "Not found"}
-            }
+                "404": {"description": "Not found"},
+            },
         }
 
     if "delete" in schema.permissions:
@@ -213,12 +213,12 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
             "tags": [tag],
             "summary": f"{'Soft delete' if schema.soft_delete else 'Delete'} a {schema.name.lower()}",
             "parameters": [
-                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
+                {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema},
             ],
             "responses": {
                 "204": {"description": "Deleted"},
-                "404": {"description": "Not found"}
-            }
+                "404": {"description": "Not found"},
+            },
         }
 
     if collection_ops:
@@ -232,13 +232,13 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                 "tags": [tag],
                 "summary": f"Restore soft-deleted {schema.name.lower()}",
                 "parameters": [
-                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
+                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema},
                 ],
                 "responses": {
                     "204": {"description": "Restored"},
-                    "404": {"description": "Not found"}
-                }
-            }
+                    "404": {"description": "Not found"},
+                },
+            },
         }
 
     if "create" in schema.permissions:
@@ -250,16 +250,16 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                     "required": True,
                     "content": {"application/json": {"schema": {
                         "type": "array",
-                        "items": {"$ref": f"#/components/schemas/{schema.name}Create"}
-                    }}}
+                        "items": {"$ref": f"#/components/schemas/{schema.name}Create"},
+                    }}},
                 },
                 "responses": {
                     "201": {
                         "description": "Bulk created",
-                        "content": {"application/json": {"schema": {"type": "object"}}}
-                    }
-                }
-            }
+                        "content": {"application/json": {"schema": {"type": "object"}}},
+                    },
+                },
+            },
         }
 
     if "list" in schema.permissions:
@@ -268,12 +268,12 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                 "tags": [tag],
                 "summary": f"Export {table}",
                 "parameters": [
-                    {"name": "format", "in": "query", "schema": {"type": "string", "default": "csv"}}
+                    {"name": "format", "in": "query", "schema": {"type": "string", "default": "csv"}},
                 ],
                 "responses": {
-                    "200": {"description": "Export file"}
-                }
-            }
+                    "200": {"description": "Export file"},
+                },
+            },
         }
 
     if "read" in schema.permissions and schema.audit:
@@ -282,12 +282,12 @@ def _build_paths(schema: ModelSchema, trailing_slash: bool = False) -> dict:
                 "tags": [tag],
                 "summary": f"Audit history for {schema.name.lower()}",
                 "parameters": [
-                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema}
+                    {"name": "item_id", "in": "path", "required": True, "schema": lookup_schema},
                 ],
                 "responses": {
-                    "200": {"description": "Audit history"}
-                }
-            }
+                    "200": {"description": "Audit history"},
+                },
+            },
         }
 
     return paths

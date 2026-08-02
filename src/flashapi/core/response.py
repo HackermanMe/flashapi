@@ -1,6 +1,6 @@
 """Response formatting."""
 
-from typing import Callable
+from collections.abc import Callable
 
 
 def create_list_response(

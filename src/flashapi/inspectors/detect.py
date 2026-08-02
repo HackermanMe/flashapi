@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import is_dataclass
+from typing import TYPE_CHECKING
 
-from flashapi.core.schema import ModelSchema
+if TYPE_CHECKING:
+    from flashapi.core.schema import ModelSchema
 
 
 def inspect_model(model_class: type, plural: str | None = None) -> ModelSchema:
@@ -22,9 +24,12 @@ def inspect_model(model_class: type, plural: str | None = None) -> ModelSchema:
         from flashapi.inspectors.dataclass import DataclassInspector
         return DataclassInspector().inspect(model_class, plural)
 
-    raise TypeError(
+    msg = (
         f"Unsupported model type: {model_class}. "
         "FlashAPI supports Django models, SQLAlchemy models, Pydantic models, and dataclasses."
+    )
+    raise TypeError(
+        msg,
     )
 
 

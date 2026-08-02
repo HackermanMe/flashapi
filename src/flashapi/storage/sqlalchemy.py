@@ -5,14 +5,13 @@ from typing import Any
 
 from flashapi.storage.base import Storage
 
-
 SOFT_DELETE_FIELD = "deleted_at"
 
 
 class SQLAlchemyStorage(Storage):
     """Storage backend that delegates to a SQLAlchemy session."""
 
-    def __init__(self, session_factory, model_class: type):
+    def __init__(self, session_factory, model_class: type) -> None:
         self._session_factory = session_factory
         self._model = model_class
         self._column_types = {
@@ -22,7 +21,7 @@ class SQLAlchemyStorage(Storage):
 
     def _coerce_values(self, data: dict[str, Any]) -> dict[str, Any]:
         """Convert string values to proper Python types based on column definitions."""
-        from sqlalchemy import Date, DateTime, Time, Boolean
+        from sqlalchemy import Boolean, Date, DateTime, Time
 
         coerced = {}
         for key, value in data.items():
@@ -160,9 +159,9 @@ class SQLAlchemyStorage(Storage):
         return data
 
     def _serialize_value(self, value) -> Any:
+        import uuid as uuid_mod
         from datetime import date, datetime, time
         from decimal import Decimal
-        import uuid as uuid_mod
 
         if value is None:
             return None

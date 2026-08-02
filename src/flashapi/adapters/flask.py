@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING
 
-from flashapi.core.schema import Model, ModelSchema
-from flashapi.core.response import create_list_response, create_item_response, create_error_response
-from flashapi.core.relations import resolve_relations, find_expandable_fields
-from flashapi.core.visibility import filter_response, writable_fields, export_fields
 from flashapi.core.custom_routes import (
-    CustomRoute, custom_routes_to_openapi_paths, discover_flask_views,
+    CustomRoute,
+    custom_routes_to_openapi_paths,
+    discover_flask_views,
 )
-from flashapi.features import paginate, apply_filters, apply_sorting, apply_search
+from flashapi.core.relations import find_expandable_fields, resolve_relations
+from flashapi.core.response import create_error_response, create_item_response, create_list_response
+from flashapi.core.schema import Model, ModelSchema
+from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
+from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
 from flashapi.storage.sqlalchemy import SQLAlchemyStorage
-from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 DEFAULT_BASE_PATH = "/api"
 
@@ -33,7 +37,7 @@ def register_models(
     rate_limit: int | None = None,
     rate_window: int = 60,
     auth_backend=None,
-):
+) -> None:
     """Register models on an existing Flask app."""
     from flask import Blueprint
 
@@ -66,14 +70,11 @@ def register_models(
         rate_limiter = RateLimiter(limit=rate_limit, window=rate_window)
 
     # Metrics
-    from flashapi.features.dashboard import MetricsCollector, DASHBOARD_HTML
+    from flashapi.features.dashboard import MetricsCollector
     metrics = MetricsCollector()
 
     for model_entry in models:
-        if isinstance(model_entry, Model):
-            wrapper = model_entry
-        else:
-            wrapper = Model(model_entry)
+        wrapper = model_entry if isinstance(model_entry, Model) else Model(model_entry)
 
         schema = inspect_model(wrapper.model_class, plural=wrapper.plural)
         schema.permissions = wrapper.permissions
@@ -149,15 +150,16 @@ def _add_websocket_route(app, base_path: str) -> None:
         return
 
     import json
+
     from flashapi.features.websocket import get_hub
 
     sock = Sock(app)
 
     class _FlaskConnection:
-        def __init__(self, ws):
+        def __init__(self, ws) -> None:
             self._ws = ws
 
-        def send_message(self, message: str):
+        def send_message(self, message: str) -> None:
             self._ws.send(message)
 
         def __hash__(self):
@@ -167,7 +169,7 @@ def _add_websocket_route(app, base_path: str) -> None:
             return isinstance(other, _FlaskConnection) and self._ws is other._ws
 
     @sock.route(f"{base_path}/ws")
-    def websocket_endpoint(ws):
+    def websocket_endpoint(ws) -> None:
         hub = get_hub()
         conn = _FlaskConnection(ws)
         try:
@@ -193,7 +195,7 @@ def _add_websocket_route(app, base_path: str) -> None:
             hub.remove_connection(conn)
 
 
-def _add_api_root_route(blueprint, schemas: list[ModelSchema], base_path: str, docs: bool):
+def _add_api_root_route(blueprint, schemas: list[ModelSchema], base_path: str, docs: bool) -> None:
     from flask import jsonify, request
 
     @blueprint.route("/", endpoint="flashapi_root")
@@ -211,12 +213,12 @@ def _add_api_root_route(blueprint, schemas: list[ModelSchema], base_path: str, d
 
 
 def _add_rate_limit_middleware(app, rate_limiter) -> None:
-    from flask import request, jsonify
+    from flask import jsonify, request
 
     @app.before_request
     def _check_rate_limit():
         client_ip = request.remote_addr or "unknown"
-        allowed, remaining, reset = rate_limiter.check(client_ip)
+        allowed, _remaining, reset = rate_limiter.check(client_ip)
         if not allowed:
             response = jsonify({"error": "Rate limit exceeded", "status": 429, "retryAfter": reset})
             response.status_code = 429
@@ -224,11 +226,12 @@ def _add_rate_limit_middleware(app, rate_limiter) -> None:
             response.headers["X-RateLimit-Remaining"] = "0"
             response.headers["X-RateLimit-Reset"] = str(reset)
             return response
+        return None
 
     @app.after_request
     def _add_rate_limit_headers(response):
         client_ip = request.remote_addr or "unknown"
-        allowed, remaining, reset = rate_limiter.check(client_ip)
+        _allowed, remaining, reset = rate_limiter.check(client_ip)
         response.headers["X-RateLimit-Limit"] = str(rate_limiter.limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(reset)
@@ -236,7 +239,8 @@ def _add_rate_limit_middleware(app, rate_limiter) -> None:
 
 
 def _add_dashboard_routes(blueprint, metrics, webhook) -> None:
-    from flask import jsonify, Response
+    from flask import Response, jsonify
+
     from flashapi.features.dashboard import DASHBOARD_HTML
 
     @blueprint.route("/dashboard", methods=["GET"], endpoint="flashapi_dashboard")
@@ -249,7 +253,7 @@ def _add_dashboard_routes(blueprint, metrics, webhook) -> None:
 
 
 def _add_docs_routes(blueprint, schemas: list[ModelSchema], custom_routes: list[CustomRoute], flask_app=None) -> None:
-    from flask import jsonify, Response
+    from flask import Response, jsonify
 
     openapi_spec = generate_openapi_schema(schemas)
 
@@ -273,8 +277,8 @@ def _add_docs_routes(blueprint, schemas: list[ModelSchema], custom_routes: list[
         return Response(html, content_type="text/html")
 
 
-def _create_nested_route(blueprint, parent_plural, child_plural, foreign_key, storage, formatter):
-    from flask import request, jsonify
+def _create_nested_route(blueprint, parent_plural, child_plural, foreign_key, storage, formatter) -> None:
+    from flask import jsonify, request
 
     @blueprint.route(
         f"/{parent_plural}/<int:parent_id>/{child_plural}",
@@ -295,7 +299,7 @@ def _create_nested_route(blueprint, parent_plural, child_plural, foreign_key, st
         sort = params.get("sort")
         search = params.get("search")
 
-        child_fields = {k for item in items for k in item.keys() if k != "id"}
+        child_fields = {k for item in items for k in item if k != "id"}
         if search:
             items = apply_search(items, search, child_fields)
         if sort:
@@ -337,7 +341,8 @@ def _create_flask_routes(
     metrics=None,
     auth_backend=None,
 ) -> None:
-    from flask import request, jsonify
+    from flask import jsonify, request
+
     from flashapi.features.auth import check_access, get_scope_filter
 
     table = schema.plural
@@ -389,8 +394,8 @@ def _create_flask_routes(
             return ""
         return auth_backend.get_user_identifier(user)
 
-    def _broadcast(entity: str, action: str, data: dict | None = None):
-        from flashapi.features.websocket import broadcast_event, EVENT_MAP
+    def _broadcast(entity: str, action: str, data: dict | None = None) -> None:
+        from flashapi.features.websocket import EVENT_MAP, broadcast_event
         event_type = EVENT_MAP.get(action)
         if event_type:
             broadcast_event(entity, event_type, data)
@@ -461,7 +466,7 @@ def _create_flask_routes(
     if "read" in schema.permissions and entity_audit:
         @blueprint.route(f"/{table}/<{id_converter}:item_id>/history", methods=["GET"], endpoint=f"{table}_history")
         def history_item(item_id, _table=table, _entity=entity_name, _audit=audit_log):
-            user, role, err = _check_auth("read")
+            _user, _role, err = _check_auth("read")
             if err:
                 return err
 
@@ -563,7 +568,7 @@ def _create_flask_routes(
         if supports_soft_delete:
             @blueprint.route(f"/{table}/<{id_converter}:item_id>/restore", methods=["POST"], endpoint=f"{table}_restore")
             def restore_item(item_id, _table=table, _lf=lookup_field):
-                user, role, err = _check_auth("delete")
+                _user, _role, err = _check_auth("delete")
                 if err:
                     return err
 
@@ -683,7 +688,7 @@ def _create_flask_routes(
             }), 200
 
     if "list" in schema.permissions:
-        from flashapi.features.export import EXPORTERS, CONTENT_TYPES
+        from flashapi.features.export import CONTENT_TYPES, EXPORTERS
 
         @blueprint.route(f"/{table}/export", methods=["GET"], endpoint=f"{table}_export")
         def export_items(_table=table, _schema=model_schema):
@@ -696,7 +701,7 @@ def _create_flask_routes(
             fmt = request.args.get("format", "csv").lower()
             if fmt not in EXPORTERS:
                 return jsonify(create_error_response(
-                    f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400
+                    f"Unsupported format: {fmt}. Use csv, xlsx, or pdf", 400,
                 )), 400
             items = storage.list_all(_table)
 

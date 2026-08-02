@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import sqlite3
 
 
 class AuditLog:
     """SQLite-backed audit trail."""
 
-    def __init__(self, conn: sqlite3.Connection, table_name: str = "flash_audit_log"):
+    def __init__(self, conn: sqlite3.Connection, table_name: str = "flash_audit_log") -> None:
         self._conn = conn
         self._table = table_name
         self._ensure_table()
@@ -79,4 +81,4 @@ class AuditLog:
             new_val = new.get(key)
             if old_val != new_val:
                 diff[key] = {"from": old_val, "to": new_val}
-        return diff if diff else None
+        return diff or None

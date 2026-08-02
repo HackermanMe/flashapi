@@ -11,7 +11,7 @@ from typing import Any
 class MetricsCollector:
     """Thread-safe metrics collector for FlashAPI operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._start_time = time.time()
         self._entity_ops: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._totals: dict[str, int] = defaultdict(int)

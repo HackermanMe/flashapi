@@ -27,9 +27,7 @@ Unsubscribe message (client → server):
 from __future__ import annotations
 
 import json
-import asyncio
 from datetime import datetime, timezone
-from typing import Any, Callable
 
 
 class WebSocketHub:
@@ -38,7 +36,7 @@ class WebSocketHub:
     Framework adapters register connections and call broadcast() on CRUD events.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: dict[str, set] = {}
 
     def subscribe(self, topic: str, connection) -> None:
