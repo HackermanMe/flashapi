@@ -4,13 +4,17 @@
    <stop stop-color="#FFD700" offset="0%"/>
    <stop stop-color="#FF8C00" offset="100%"/>
   </linearGradient>
+  <linearGradient y2="0%" x2="100%" y1="0%" x1="0%" id="text-grad">
+   <stop stop-color="#1a1a2e" offset="0%"/>
+   <stop stop-color="#16213e" offset="100%"/>
+  </linearGradient>
  </defs>
  <!-- Lightning bolt icon -->
  <!-- FlashAPI text -->
  <!-- Tagline -->
  <g>
   <title>Layer 1</title>
-  <text font-style="italic" id="svg_2" fill="#ffffff" font-weight="bold" font-size="42" font-family="Inter, -apple-system, sans-serif" y="71" x="112">Flash</text>
+  <text font-style="italic" id="svg_2" fill="url(#text-grad)" font-weight="bold" font-size="42" font-family="Inter, -apple-system, sans-serif" y="71" x="112">Flash</text>
   <text font-style="italic" id="svg_3" fill="url(#bolt)" font-weight="bold" font-size="42" font-family="Inter, -apple-system, sans-serif" y="70" x="222">API</text>
   <text style="cursor: move;" id="svg_4" fill="#666" font-size="13" font-family="Inter, -apple-system, sans-serif" y="95" x="113">Define your models. FlashAPI does the rest.</text>
   <g>
