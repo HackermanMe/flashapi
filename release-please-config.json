@@ -1,0 +1,10 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "python-flashapi",
+      "bump-minor-pre-major": true,
+      "extra-files": ["pyproject.toml"]
+    }
+  }
+}
