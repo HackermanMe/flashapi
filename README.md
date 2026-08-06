@@ -46,7 +46,12 @@ Part of the **FlashAPI Ecosystem** — ensuring SDK client compatibility across 
 ## Installation
 
 ```bash
-pip install python-flashapi[fastapi]   # or python-flashapi[flask] or python-flashapi[all]
+# x-release-please-start-version
+pip install python-flashapi==0.2.0
+# x-release-please-end
+
+# With framework extras:
+pip install python-flashapi[fastapi]   # or [flask] or [django] or [all]
 ```
 
 ---
