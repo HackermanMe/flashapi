@@ -126,7 +126,7 @@ def register_models(
             )
 
     # Dashboard
-    _add_dashboard_routes(blueprint, metrics, webhook)
+    _add_dashboard_routes(blueprint, metrics, webhook, all_schemas, storages, base_path)
 
     # WebSocket
     _add_websocket_route(app, base_path)
@@ -240,10 +240,11 @@ def _add_rate_limit_middleware(app, rate_limiter) -> None:
         return response
 
 
-def _add_dashboard_routes(blueprint, metrics, webhook) -> None:
+def _add_dashboard_routes(blueprint, metrics, webhook, schemas, storages, base_path) -> None:
     from flask import Response, jsonify
 
     from flashapi.features.dashboard import DASHBOARD_HTML
+    from flashapi.features.dashboard_crud import render_crud_dashboard
 
     @blueprint.route("/dashboard", methods=["GET"], endpoint="flashapi_dashboard")
     def dashboard_html():
@@ -252,6 +253,29 @@ def _add_dashboard_routes(blueprint, metrics, webhook) -> None:
     @blueprint.route("/dashboard/metrics.json", methods=["GET"], endpoint="flashapi_dashboard_metrics")
     def dashboard_metrics():
         return jsonify(metrics.get_metrics(webhook))
+
+    # CRUD Dashboard
+    @blueprint.route("/dashboard/crud", methods=["GET"], endpoint="flashapi_dashboard_crud")
+    def dashboard_crud_html():
+        entity_names = [s.name for s in schemas]
+        return Response(render_crud_dashboard(entity_names, base_path), content_type="text/html")
+
+    @blueprint.route("/dashboard/counts", methods=["GET"], endpoint="flashapi_dashboard_counts")
+    def dashboard_counts():
+        counts = {}
+        for schema in schemas:
+            storage = storages.get(schema.name)
+            if storage:
+                counts[schema.name] = storage.count()
+        return jsonify(counts)
+
+    @blueprint.route("/dashboard/<entity_name>/schema", methods=["GET"], endpoint="flashapi_dashboard_schema")
+    def dashboard_schema(entity_name: str):
+        schema = next((s for s in schemas if s.name == entity_name), None)
+        if not schema:
+            return jsonify({"error": "Entity not found"}), 404
+        fields = [f.name for f in schema.fields if not f.primary_key and not f.auto_generated and not f.hidden]
+        return jsonify({"fields": fields})
 
 
 def _add_docs_routes(blueprint, schemas: list[ModelSchema], custom_routes: list[CustomRoute], flask_app=None) -> None:
