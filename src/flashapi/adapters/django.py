@@ -12,6 +12,7 @@ from flashapi.core.schema import Model, ModelSchema
 from flashapi.core.visibility import export_fields, filter_response, writable_fields
 from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
+from flashapi.features.health import get_health_check
 from flashapi.inspectors import inspect_model
 from flashapi.storage.orm import DjangoORMStorage
 
@@ -113,6 +114,7 @@ def generate_urls(
         ))
 
     urlpatterns.extend(_create_api_root_view(all_schemas, docs))
+    urlpatterns.extend(_create_health_views())
 
     return urlpatterns
 
@@ -769,3 +771,38 @@ def _create_django_views(
             patterns.append(path(f"{table}/<str:item_id>/history/", history_view, name=f"{table}_history"))
 
     return patterns
+
+
+def _create_health_views():
+    """Create health check views for production monitoring."""
+    from django.http import JsonResponse
+    from django.urls import path
+
+    health_check = get_health_check()
+
+    def liveness_view(request):
+        """Liveness probe — is the application running?"""
+        return JsonResponse(health_check.liveness())
+
+    def readiness_view(request):
+        """Readiness probe — is the application ready to serve traffic?"""
+        data, status_code = health_check.readiness()
+        return JsonResponse(data, status=status_code)
+
+    # Register database check for Django ORM
+    def check_database():
+        try:
+            from django.db import connection
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+
+    health_check.register_check("database", check_database)
+    health_check.mark_ready()
+
+    return [
+        path("health/", liveness_view, name="health_liveness"),
+        path("ready/", readiness_view, name="health_readiness"),
+    ]

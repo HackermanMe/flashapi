@@ -14,6 +14,7 @@ from flashapi.core.visibility import export_fields, filter_response, writable_fi
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.features.dashboard import DASHBOARD_HTML, MetricsCollector
 from flashapi.features.export import CONTENT_TYPES, EXPORTERS
+from flashapi.features.health import get_health_check
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
 from flashapi.storage.sqlalchemy import SQLAlchemyStorage
@@ -143,6 +144,7 @@ class FlashAPI:
         self._add_dashboard_routes()
         self._add_websocket_route()
         self._add_api_root()
+        self._add_health_routes()
 
     def _prepare_model(self, model_entry) -> None:
         wrapper = model_entry if isinstance(model_entry, Model) else Model(model_entry)
@@ -247,6 +249,36 @@ class FlashAPI:
                 "dashboard": base + "dashboard/",
             }
             return {"resources": resources, "links": links}
+
+    def _add_health_routes(self) -> None:
+        """Add health check endpoints for production monitoring."""
+        health_check = get_health_check()
+
+        @self._app.get("/health", tags=["Health"], include_in_schema=False)
+        async def liveness():
+            """Liveness probe — is the application running?"""
+            return health_check.liveness()
+
+        @self._app.get("/ready", tags=["Health"], include_in_schema=False)
+        async def readiness():
+            """Readiness probe — is the application ready to serve traffic?"""
+            data, status_code = health_check.readiness()
+            return JSONResponse(content=data, status_code=status_code)
+
+        # Register database check if using SQLAlchemy
+        if self._session_factory:
+            def check_database():
+                try:
+                    session = self._session_factory()
+                    session.execute("SELECT 1")
+                    session.close()
+                    return True
+                except Exception:
+                    return False
+            health_check.register_check("database", check_database)
+
+        # Mark ready after all routes are registered
+        health_check.mark_ready()
 
     def _add_rate_limit_middleware(self) -> None:
         from starlette.middleware.base import BaseHTTPMiddleware

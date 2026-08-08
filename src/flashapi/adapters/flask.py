@@ -13,6 +13,7 @@ from flashapi.core.schema import Model, ModelSchema
 from flashapi.core.visibility import export_fields, filter_response, writable_fields
 from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
+from flashapi.features.health import get_health_check
 from flashapi.inspectors import inspect_model
 from flashapi.storage.auto import AutoStorage
 from flashapi.storage.sqlalchemy import SQLAlchemyStorage
@@ -138,6 +139,7 @@ def register_models(
         _add_docs_routes(blueprint, all_schemas, custom_routes or [], flask_app=app)
 
     _add_api_root_route(blueprint, all_schemas, base_path, docs)
+    _add_health_routes(app, session_factory)
 
     app.register_blueprint(blueprint)
 
@@ -726,3 +728,35 @@ def _create_flask_routes(
                 mimetype=CONTENT_TYPES[fmt],
                 headers={"Content-Disposition": f'attachment; filename="{_table}.{fmt}"'},
             )
+
+
+def _add_health_routes(app, session_factory) -> None:
+    """Add health check endpoints for production monitoring."""
+    from flask import jsonify
+    health_check = get_health_check()
+
+    @app.route("/health")
+    def liveness():
+        """Liveness probe — is the application running?"""
+        return jsonify(health_check.liveness())
+
+    @app.route("/ready")
+    def readiness():
+        """Readiness probe — is the application ready to serve traffic?"""
+        data, status_code = health_check.readiness()
+        return jsonify(data), status_code
+
+    # Register database check if using SQLAlchemy
+    if session_factory:
+        def check_database():
+            try:
+                session = session_factory()
+                session.execute("SELECT 1")
+                session.close()
+                return True
+            except Exception:
+                return False
+        health_check.register_check("database", check_database)
+
+    # Mark ready after all routes are registered
+    health_check.mark_ready()
