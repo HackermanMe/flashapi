@@ -177,6 +177,7 @@ class FlashAPI:
         bp = self._base_path
         metrics = self._metrics
         webhook = self._webhook
+        schemas = self._schemas
 
         @self._app.get(f"{bp}/dashboard", tags=["Dashboard"], name="dashboard_html", include_in_schema=False)
         async def dashboard_html():
@@ -186,6 +187,31 @@ class FlashAPI:
         @self._app.get(f"{bp}/dashboard/metrics.json", tags=["Dashboard"], name="dashboard_metrics")
         async def dashboard_metrics():
             return metrics.get_metrics(webhook)
+
+        # CRUD Dashboard
+        @self._app.get(f"{bp}/dashboard/crud", tags=["Dashboard"], name="dashboard_crud_html", include_in_schema=False)
+        async def dashboard_crud_html():
+            from fastapi.responses import HTMLResponse
+            from flashapi.features.dashboard_crud import render_crud_dashboard
+            entity_names = [s.name for s in schemas]
+            return HTMLResponse(content=render_crud_dashboard(entity_names, bp))
+
+        @self._app.get(f"{bp}/dashboard/counts", tags=["Dashboard"], name="dashboard_counts")
+        async def dashboard_counts():
+            counts = {}
+            for schema in schemas:
+                storage = self._storages.get(schema.name)
+                if storage:
+                    counts[schema.name] = storage.count()
+            return counts
+
+        @self._app.get(f"{bp}/dashboard/{{entity_name}}/schema", tags=["Dashboard"], name="dashboard_schema")
+        async def dashboard_schema(entity_name: str):
+            schema = next((s for s in schemas if s.name == entity_name), None)
+            if not schema:
+                return JSONResponse({"error": "Entity not found"}, status_code=404)
+            fields = [f.name for f in schema.fields if not f.primary_key and not f.auto_generated and not f.hidden]
+            return {"fields": fields}
 
     def _add_websocket_route(self) -> None:
         import json
