@@ -102,7 +102,7 @@ def generate_urls(
         urlpatterns.extend(patterns)
 
     # Dashboard
-    urlpatterns.extend(_create_dashboard_views(metrics, webhook, all_schemas, storages, base_path))
+    urlpatterns.extend(_create_dashboard_views(metrics, webhook))
 
     # Rate limiting middleware class (user must add to MIDDLEWARE)
     if rate_limiter:
@@ -187,12 +187,11 @@ class FlashAPIRateLimitMiddleware:
         return request.META.get("REMOTE_ADDR", "unknown")
 
 
-def _create_dashboard_views(metrics, webhook, schemas=None, storages=None, base_path="/api"):
+def _create_dashboard_views(metrics, webhook):
     from django.http import HttpResponse, JsonResponse
     from django.urls import path
 
     from flashapi.features.dashboard import DASHBOARD_HTML
-    from flashapi.features.dashboard_crud import render_crud_dashboard
 
     def dashboard_html(request):
         return HttpResponse(DASHBOARD_HTML, content_type="text/html")
@@ -200,35 +199,9 @@ def _create_dashboard_views(metrics, webhook, schemas=None, storages=None, base_
     def dashboard_metrics(request):
         return JsonResponse(metrics.get_metrics(webhook))
 
-    # CRUD Dashboard
-    def dashboard_crud_html(request):
-        entity_names = [s.name for s in schemas] if schemas else []
-        return HttpResponse(render_crud_dashboard(entity_names, base_path), content_type="text/html")
-
-    def dashboard_counts(request):
-        counts = {}
-        if schemas and storages:
-            for schema in schemas:
-                storage = storages.get(schema.name)
-                if storage:
-                    counts[schema.name] = storage.count()
-        return JsonResponse(counts)
-
-    def dashboard_schema(request, entity_name):
-        if not schemas:
-            return JsonResponse({"error": "Entity not found"}, status=404)
-        schema = next((s for s in schemas if s.name == entity_name), None)
-        if not schema:
-            return JsonResponse({"error": "Entity not found"}, status=404)
-        fields = [f.name for f in schema.fields if not f.primary_key and not f.auto_generated and not f.hidden]
-        return JsonResponse({"fields": fields})
-
     return [
         path("dashboard/", dashboard_html, name="flashapi_dashboard"),
         path("dashboard/metrics.json", dashboard_metrics, name="flashapi_dashboard_metrics"),
-        path("dashboard/crud/", dashboard_crud_html, name="flashapi_dashboard_crud"),
-        path("dashboard/counts/", dashboard_counts, name="flashapi_dashboard_counts"),
-        path("dashboard/<str:entity_name>/schema/", dashboard_schema, name="flashapi_dashboard_schema"),
     ]
 
 
