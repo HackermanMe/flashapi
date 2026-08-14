@@ -66,6 +66,7 @@ Just add `@api_doc()` on your views. FlashAPI auto-discovers them:
 # views.py
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from flashapi import api_doc
 import json
 
@@ -73,6 +74,7 @@ import json
          body={"client_id": "int", "table_id": "int", "plats": "array"},
          body_required=["client_id", "table_id", "plats"])
 @csrf_exempt
+@require_POST
 def checkout(request):
     body = json.loads(request.body)
     # your business logic...
@@ -106,12 +108,49 @@ custom_views = [
 urlpatterns = [
     path("api/", include(
         generate_urls(models=[Plat, Commande, Client], extra_views=custom_views)
-        + custom_views
     )),
+    # Register custom views for actual routing (extra_views only adds them to Swagger)
+    path("api/checkout/", views.checkout),
+    path("api/stats/chiffre-affaires/", views.chiffre_affaires),
+    path("api/reports/bestsellers/", views.bestsellers),
 ]
 ```
 
-That's it. `@api_doc` on the view + pass `extra_views` to `generate_urls()`. FlashAPI reads the decorator metadata and adds your endpoints to Swagger — no duplicate declarations.
+That's it. `@api_doc` on the view + pass `extra_views` to `generate_urls()` for Swagger documentation, and register the same paths in `urlpatterns` for actual routing.
+
+#### Path parameters
+
+Django URL parameters (`<int:id>`, `<str:slug>`, etc.) are automatically converted to OpenAPI path parameters in Swagger:
+
+```python
+# views.py
+@api_doc(
+    tag="Ingestion",
+    summary="Ingest a book from its uploaded PDF",
+    methods=["post"],
+    params={"book_id": "int"},
+    body={"force": "bool"},
+    body_required=[],
+    response={"status": "string", "total_sentences": "int"},
+)
+@csrf_exempt
+@require_POST
+def ingest_view(request, book_id):
+    # book_id comes from the URL path
+    ...
+
+# urls.py
+extra_views = [
+    path("books/<int:book_id>/ingest/", views.ingest_view),
+]
+
+urlpatterns = [
+    path("api/", include(generate_urls(models=[Book], extra_views=extra_views))),
+    path("api/books/<int:book_id>/ingest/", views.ingest_view),
+]
+```
+
+In Swagger, this renders as `/books/{book_id}/ingest/` with `book_id` as a required integer path parameter. The `params` dict in `@api_doc` controls the type shown in Swagger (`"int"` → integer, `"string"` → string, etc.).
 
 ### Custom routes (Flask)
 
