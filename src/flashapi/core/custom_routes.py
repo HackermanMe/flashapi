@@ -121,6 +121,8 @@ def discover_django_views(url_patterns, trailing_slash: bool = True) -> dict[str
     """Scan Django URL patterns for @api_doc-decorated views and build OpenAPI paths."""
     paths: dict[str, dict] = {}
 
+    import re
+
     for pattern in url_patterns:
         callback = getattr(pattern, "callback", None)
         if callback is None:
@@ -130,8 +132,9 @@ def discover_django_views(url_patterns, trailing_slash: bool = True) -> dict[str
         if doc is None:
             continue
 
-        # Build path from Django pattern
+        # Build path from Django pattern, converting <type:name> to {name}
         path_str = "/" + str(pattern.pattern)
+        path_str = re.sub(r"<(?:\w+:)?(\w+)>", r"{\1}", path_str)
         if trailing_slash and not path_str.endswith("/"):
             path_str += "/"
 
@@ -143,8 +146,27 @@ def discover_django_views(url_patterns, trailing_slash: bool = True) -> dict[str
         if path_str not in paths:
             paths[path_str] = {}
 
+        # Extract path parameters from URL pattern
+        path_params = re.findall(r"\{(\w+)\}", path_str)
+
         for method in methods:
-            paths[path_str][method] = _build_openapi_operation(doc, method)
+            operation = _build_openapi_operation(doc, method)
+            if path_params:
+                if "parameters" not in operation:
+                    operation["parameters"] = []
+                # Remove any query params that are actually path params
+                operation["parameters"] = [
+                    p for p in operation["parameters"] if p["name"] not in path_params
+                ]
+                for pname in path_params:
+                    ptype = doc.get("params", {}).get(pname, "string") if doc.get("params") else "string"
+                    operation["parameters"].append({
+                        "name": pname,
+                        "in": "path",
+                        "required": True,
+                        "schema": TYPE_MAP.get(ptype, {"type": "string"}),
+                    })
+            paths[path_str][method] = operation
 
     return paths
 
