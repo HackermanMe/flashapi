@@ -47,7 +47,7 @@ Part of the **FlashAPI Ecosystem** — ensuring SDK client compatibility across 
 
 ```bash
 # x-release-please-start-version
-pip install python-flashapi==0.2.0
+pip install python-flashapi==0.3.0
 # x-release-please-end
 
 # With framework extras:
