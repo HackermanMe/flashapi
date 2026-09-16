@@ -10,7 +10,7 @@ from pydantic import BaseModel, create_model
 from flashapi.core.relations import find_expandable_fields, resolve_relations
 from flashapi.core.response import create_error_response, create_item_response, create_list_response
 from flashapi.core.schema import FieldType, Model, ModelSchema
-from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.core.visibility import export_fields, filter_response, select_fields, writable_fields
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.features.dashboard import DASHBOARD_HTML, MetricsCollector
 from flashapi.features.export import CONTENT_TYPES, EXPORTERS
@@ -450,6 +450,13 @@ class FlashAPI:
 
             metrics.record("READ", tag)
             page_items = [filter_response(item, model_schema) for item in page_items]
+
+            # Apply field selection if ?fields parameter provided
+            fields_param = request.query_params.get("fields")
+            if fields_param:
+                field_list = [f.strip() for f in fields_param.split(",")]
+                page_items = [select_fields(item, field_list, model_schema) for item in page_items]
+
             return create_list_response(page_items, total, page, size, formatter)
 
     def _add_read_route(self, table, formatter, storage, tag, expandable, model_schema, lookup_field="id") -> None:
@@ -481,6 +488,13 @@ class FlashAPI:
                 item = self._expand_items([item], expand, expandable)[0]
 
             item = filter_response(item, model_schema)
+
+            # Apply field selection if ?fields parameter provided
+            fields_param = request.query_params.get("fields")
+            if fields_param:
+                field_list = [f.strip() for f in fields_param.split(",")]
+                item = select_fields(item, field_list, model_schema)
+
             return create_item_response(item, formatter)
 
     def _add_history_route(self, table, entity_name, lookup_field="id", model_schema=None) -> None:

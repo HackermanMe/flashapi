@@ -44,3 +44,39 @@ def filter_input(data: dict, schema: ModelSchema) -> dict:
     """Remove readonly/hidden fields from input dict."""
     allowed = writable_fields(schema)
     return {k: v for k, v in data.items() if k in allowed}
+
+
+def select_fields(data: dict, fields: list[str] | None, schema: ModelSchema) -> dict:
+    """
+    Select only requested fields from response data.
+
+    Field selection (?fields=id,name,price) allows clients to request only specific fields,
+    reducing payload size and improving performance.
+
+    Args:
+        data: Response dict to filter
+        fields: List of field names to include (None = return all visible fields)
+        schema: Model schema for validation
+
+    Returns:
+        Dict containing only requested fields that exist and are visible (id always included)
+
+    Example:
+        >>> select_fields({"id": 1, "name": "Laptop", "price": 999, "stock": 10}, ["name"], schema)
+        {"id": 1, "name": "Laptop"}  # id always included
+    """
+    if not fields:
+        return data
+
+    # Get visible fields from schema
+    visible = response_fields(schema)
+
+    # Filter: requested fields + always include id
+    result = {}
+    for k, v in data.items():
+        if k == "id":
+            result[k] = v  # Always include id
+        elif k in fields and k in visible:
+            result[k] = v
+
+    return result

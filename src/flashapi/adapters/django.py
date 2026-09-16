@@ -9,7 +9,7 @@ from flashapi.core.custom_routes import (
 )
 from flashapi.core.response import create_error_response, create_item_response, create_list_response
 from flashapi.core.schema import Model, ModelSchema
-from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.core.visibility import export_fields, filter_response, select_fields, writable_fields
 from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.features.health import get_health_check
@@ -337,6 +337,7 @@ def _create_django_views(
                 sort = params.get("sort")
                 search = params.get("search")
                 deleted_param = params.get("deleted", "false").lower() == "true"
+                fields_param = params.get("fields")  # Field selection: ?fields=id,name,price
 
                 only_deleted = deleted_param and supports_soft_delete
                 items = storage.list_all(_table, only_deleted=only_deleted)
@@ -352,6 +353,12 @@ def _create_django_views(
                 items = apply_sorting(items, sort, _fields)
                 page_items, total = paginate(items, page, size)
                 page_items = [filter_response(item, _schema) for item in page_items]
+
+                # Apply field selection if ?fields parameter provided
+                if fields_param:
+                    field_list = [f.strip() for f in fields_param.split(",")]
+                    page_items = [select_fields(item, field_list, _schema) for item in page_items]
+
                 if metrics:
                     metrics.record("READ", entity_name)
                 return JsonResponse(
@@ -681,6 +688,13 @@ def _create_django_views(
                     return JsonResponse(create_error_response("Not found", 404), status=404)
 
                 item = filter_response(item, _schema)
+
+                # Apply field selection if ?fields parameter provided
+                fields_param = request.GET.get("fields")
+                if fields_param:
+                    field_list = [f.strip() for f in fields_param.split(",")]
+                    item = select_fields(item, field_list, _schema)
+
                 return JsonResponse(create_item_response(item, formatter))
 
             if request.method == "PUT" and "update" in _schema.permissions:

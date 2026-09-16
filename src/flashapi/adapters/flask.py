@@ -10,7 +10,7 @@ from flashapi.core.custom_routes import (
 from flashapi.core.relations import find_expandable_fields, resolve_relations
 from flashapi.core.response import create_error_response, create_item_response, create_list_response
 from flashapi.core.schema import Model, ModelSchema
-from flashapi.core.visibility import export_fields, filter_response, writable_fields
+from flashapi.core.visibility import export_fields, filter_response, select_fields, writable_fields
 from flashapi.docs.openapi import generate_openapi_schema, get_swagger_html
 from flashapi.features import apply_filters, apply_search, apply_sorting, paginate
 from flashapi.features.health import get_health_check
@@ -441,6 +441,13 @@ def _create_flask_routes(
             if _metrics:
                 _metrics.record("READ", entity_name)
             page_items = [filter_response(item, _schema) for item in page_items]
+
+            # Apply field selection if ?fields parameter provided
+            fields_param = request.args.get("fields")
+            if fields_param:
+                field_list = [f.strip() for f in fields_param.split(",")]
+                page_items = [select_fields(item, field_list, _schema) for item in page_items]
+
             return jsonify(create_list_response(page_items, total, page, size, formatter))
 
     if "read" in schema.permissions:
@@ -463,6 +470,13 @@ def _create_flask_routes(
                 item = _expand_items([item], expand, _exp, storage)[0]
 
             item = filter_response(item, _schema)
+
+            # Apply field selection if ?fields parameter provided
+            fields_param = request.args.get("fields")
+            if fields_param:
+                field_list = [f.strip() for f in fields_param.split(",")]
+                item = select_fields(item, field_list, _schema)
+
             return jsonify(create_item_response(item, formatter))
 
     if "read" in schema.permissions and entity_audit:
