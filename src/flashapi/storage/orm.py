@@ -38,6 +38,10 @@ class DjangoORMStorage(Storage):
         instance = self._get_instance(item_id, lookup_field)
         if instance is None:
             return None
+        # Fix Bug #3: Respect soft delete in GET /{id}
+        if self._has_deleted_at:
+            if getattr(instance, SOFT_DELETE_FIELD, None) is not None:
+                return None
         return self._to_dict(instance)
 
     def list_all(self, table: str, *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict[str, Any]]:

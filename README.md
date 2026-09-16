@@ -22,9 +22,11 @@
 
 ---
 
-FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, full-text search, relations, soft delete, bulk operations, export, audit trail, webhooks, rate limiting, and a live dashboard — from your existing models, in one line.
+FlashAPI generates a full REST API with CRUD, pagination, filtering, sorting, full-text search, relations, soft delete, bulk operations, export, audit trail, webhooks, rate limiting, **idempotency keys**, **cache layer**, **currentUser auto-injection**, and a live dashboard — from your existing models, in one line.
 
 Part of the **FlashAPI Ecosystem** — ensuring SDK client compatibility across all backends (Python, Java Spring, Node.js).
+
+**New in 0.4.0:** Idempotency keys (prevent double-click/retry duplicates), cache layer with graceful fallback, currentUserField auto-injection, and audit enabled by default.
 
 ---
 
@@ -189,8 +191,9 @@ FlashAPI(
         Model(Config, readonly=True, access="admin"),      # GET only, admin
         Model(Log, only=["list"]),                         # List only
         Model(Animal, plural="animaux"),                   # Custom plural
-        Model(Invoice, soft_delete=True, audit=True),      # Opt-in features
+        Model(Invoice, soft_delete=True, audit=True),      # Opt-in features (audit=True by default)
         Model(Eleve, access="staff", scope="tenant", tenant_field="ecole_id"),
+        Model(Post, current_user_field="author"),          # Auto-inject authenticated user on create
     ],
     base_path="/api",       # Configurable prefix (default: /api)
     auth_backend=MyAuth(),  # Your AuthBackend implementation
@@ -198,6 +201,14 @@ FlashAPI(
     rate_limit=100,         # 100 requests per window
     rate_window=60,         # 60 seconds window
 )
+
+# Enable idempotency (prevents duplicate operations from double-click/retry)
+# Client sends: Idempotency-Key: <uuid> header
+# Same key + same request → returns stored response (no duplicate created)
+
+# Enable cache layer (graceful fallback if Redis down)
+from flashapi.features.cache import CacheLayer, RedisCache, register_cache
+register_cache(CacheLayer(RedisCache(host='localhost')))
 ```
 
 See [Customization docs](docs/customization.md) for all options.

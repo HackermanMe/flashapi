@@ -78,6 +78,7 @@ def generate_urls(
         schema.scope = wrapper.scope
         schema.tenant_field = wrapper.tenant_field
         schema.owner_field = wrapper.owner_field
+        schema.current_user_field = wrapper.current_user_field
 
         from flashapi.core.schema import validate_soft_delete
         validate_soft_delete(wrapper.model_class, wrapper.soft_delete)
@@ -266,6 +267,7 @@ def _create_django_views(
     model_scope = schema.scope
     model_tenant_field = schema.tenant_field
     model_owner_field = schema.owner_field
+    model_current_user_field = schema.current_user_field
     patterns = []
 
     def _check_auth(request, operation):
@@ -370,6 +372,24 @@ def _create_django_views(
                 scope_filter = _get_scope(user, role)
                 if scope_filter:
                     data.update(scope_filter)
+
+                # Auto-inject current user if current_user_field specified
+                if model_current_user_field and user and auth_backend:
+                    user_id = auth_backend.get_owner_id(user)
+                    if user_id is not None:
+                        # For ForeignKey fields, Django expects field_id
+                        # For non-FK fields, use field directly
+                        # Try FK syntax first (most common case)
+                        try:
+                            storage._model._meta.get_field(model_current_user_field)
+                            field = storage._model._meta.get_field(model_current_user_field)
+                            if field.many_to_one:  # ForeignKey
+                                data[f"{model_current_user_field}_id"] = user_id
+                            else:
+                                data[model_current_user_field] = user_id
+                        except Exception:
+                            # Fallback: assume FK
+                            data[f"{model_current_user_field}_id"] = user_id
 
                 item = storage.create(_table, data)
                 if metrics:

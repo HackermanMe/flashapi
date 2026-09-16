@@ -59,6 +59,7 @@ class ModelSchema:
     scope: str | None = None  # "tenant", "owner", or "both"
     tenant_field: str | None = None
     owner_field: str | None = None
+    current_user_field: str | None = None  # Auto-inject authenticated user on CREATE
 
 
 ALL_OPERATIONS = ["list", "read", "create", "update", "delete"]
@@ -112,12 +113,13 @@ class Model:
         only: list[str] | None = None,
         plural: str | None = None,
         soft_delete: bool = False,
-        audit: bool = False,
+        audit: bool = True,  # Enabled by default for full traceability
         lookup_field: str = "id",
         access: str | dict | bool | None = None,
         scope: str | None = None,
         tenant_field: str | None = None,
         owner_field: str | None = None,
+        current_user_field: str | None = None,
     ) -> None:
         self.model_class = model_class
         self.plural = plural
@@ -128,6 +130,7 @@ class Model:
         self.scope = scope
         self.tenant_field = tenant_field
         self.owner_field = owner_field
+        self.current_user_field = current_user_field
         self.permissions = self._resolve_permissions(readonly, exclude, only)
 
     def _resolve_permissions(
