@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/HackermanMe/flashapi/compare/v0.3.0...v0.4.0) (2026-09-18)
+
+
+### Features
+
+* add field selection (?fields=id,name,price) ([4c07e45](https://github.com/HackermanMe/flashapi/commit/4c07e4536ab442f3a984ec8108154ef47f361098))
+* add idempotency keys, cache layer, and currentUserField auto-injection ([141ae08](https://github.com/HackermanMe/flashapi/commit/141ae084afd4d605540a0cead5c4aac9cd6c41f6))
+* add interactive CRUD dashboard with HTMX and real-time WebSocket ([1b1b4a5](https://github.com/HackermanMe/flashapi/commit/1b1b4a5c9924db5858119a69fb9c2585c687fe6d))
+
+
+### Bug Fixes
+
+* **django:** convert URL path params to OpenAPI format in discover_django_views ([78e5675](https://github.com/HackermanMe/flashapi/commit/78e5675b8fafe0a87a7711f30f9b3db26bfd9dd6))
+* simplify nested if statement for ruff linter ([73fb95b](https://github.com/HackermanMe/flashapi/commit/73fb95bdd7282141081a85d0f44d6d8c4478967e))
+* sync release-please manifest and README version to 0.3.0 ([1538199](https://github.com/HackermanMe/flashapi/commit/1538199c6f9edc3fb4be9a17d9b69c67838a90bb))
+
 ## [0.3.0](https://github.com/HackermanMe/flashapi/compare/v0.2.0...v0.3.0) (2026-08-08)
 
 
